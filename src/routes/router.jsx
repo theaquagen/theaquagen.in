@@ -3,7 +3,6 @@ import PublicLayout from "../layouts/PublicLayout";
 import AdminLayout from "../layouts/AdminLayout";
 import AdminAuthLayout from "../layouts/AdminAuthLayout";
 import ProtectedRouteAdmin from "./ProtectedRouteAdmin";
-
 import { AdminAuthProvider } from "../providers/AdminAuthProvider";
 
 import Home from "../pages/public/Home";
@@ -16,30 +15,54 @@ import AdminLogin from "../pages/admin/auth/Login";
 import Dashboard from "../pages/admin/Dashboard";
 import Users from "../pages/admin/Users";
 
+import GuestOnlyPublic from "./GuestOnlyPublic";
+import GuestOnlyAdmin from "./GuestOnlyAdmin";
+
 export const router = createBrowserRouter([
-  // Public site (uses PUBLIC provider at app root)
+  // PUBLIC site
   {
     element: <PublicLayout />,
     children: [
       { path: "/", element: <Home /> },
       { path: "/about", element: <About /> },
-      { path: "/login", element: <PublicLogin /> },
-      { path: "/signup", element: <Signup /> },
+
+      // 🔒 If already logged in (public session), redirect away from auth pages
+      { path: "/login", element: (
+          <GuestOnlyPublic redirectTo="/">
+            <PublicLogin />
+          </GuestOnlyPublic>
+        )
+      },
+      { path: "/signup", element: (
+          <GuestOnlyPublic redirectTo="/">
+            <Signup />
+          </GuestOnlyPublic>
+        )
+      },
+
       { path: "/profile", element: <Profile /> },
     ],
   },
 
-  // Admin login (unprotected) — provide ADMIN auth context here
+  // ADMIN login (unprotected route group but with admin auth context)
   {
     element: (
       <AdminAuthProvider>
         <AdminAuthLayout />
       </AdminAuthProvider>
     ),
-    children: [{ path: "/admin/login", element: <AdminLogin /> }],
+    children: [
+      // 🔒 If already an admin, redirect to /admin (dashboard)
+      { path: "/admin/login", element: (
+          <GuestOnlyAdmin redirectTo="/admin">
+            <AdminLogin />
+          </GuestOnlyAdmin>
+        )
+      },
+    ],
   },
 
-  // Protected admin area — ADMIN provider must wrap ProtectedRouteAdmin
+  // ADMIN protected area (RBAC)
   {
     element: (
       <AdminAuthProvider>
