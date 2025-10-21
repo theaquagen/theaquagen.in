@@ -1,8 +1,8 @@
 export default function Dashboard() {
-  return (
-    <section className="space-y-2">
-      <h1 className="text-2xl font-bold">Admin Dashboard</h1>
-      <p className="text-gray-700">Only admins can see this.</p>
-    </section>
-  );
+    return (
+        <div className="space-y-2">
+            <div className="text-xl font-semibold">Admin Dashboard</div>
+            <p className="text-neutral-600">Only admins can see this.</p>
+        </div>
+    );
 }

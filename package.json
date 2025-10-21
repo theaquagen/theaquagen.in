@@ -1,5 +1,5 @@
 {
-  "name": "theaquagen.in",
+  "name": "www.theaquagen.in",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -11,10 +11,13 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
-    "@vercel/analytics": "^1.5.0",
+    "clsx": "^2.1.1",
     "firebase": "^12.4.0",
+    "framer-motion": "^12.23.24",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "react-easy-crop": "^5.5.3",
+    "react-image-crop": "^11.0.10",
     "react-router-dom": "^7.9.4",
     "tailwindcss": "^4.1.14"
   },

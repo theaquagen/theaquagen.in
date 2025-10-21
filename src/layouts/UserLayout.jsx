@@ -1,19 +1,19 @@
 import { Outlet } from "react-router-dom";
 
-import AdminHeader from "../components/headers/AdminHeader";
+import UserHeader from "../components/headers/UserHeader";
 
-import AdminFooter from "../components/footers/AdminFooter";
+import UserFooter from "../components/footers/UserFooter";
 
-export default function AdminLayout() {
+export default function UserLayout() {
     return (
         <div className="min-h-dvh flex flex-col bg-neutral-50">
-            <AdminHeader />
+            <UserHeader />
             
             <main className="mx-auto w-full max-w-5xl flex-1 p-4">
                 <Outlet />
             </main>
             
-            <AdminFooter />
+            <UserFooter />
         </div>
     );
 }
