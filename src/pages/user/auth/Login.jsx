@@ -9,7 +9,7 @@ import clsx from "clsx";
 
 import Button from "../../../components/ui/Button";
 
-import { GradientBackground } from "../../../components/ui/gradient";
+import { GradientBackground } from "../../../components/ui/Gradient";
 
 export default function Login() {
   const [email, setEmail] = useState("");

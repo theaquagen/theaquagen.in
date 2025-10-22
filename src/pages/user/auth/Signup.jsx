@@ -10,7 +10,7 @@ import { useNavigate, Link } from "react-router-dom";
 
 import { Field, Input, Label } from "@headlessui/react";
 import clsx from "clsx";
-import { GradientBackground } from "../../../components/ui/gradient";
+import { GradientBackground } from "../../../components/ui/Gradient";
 
 /* ──────────────────────────────────────────────────────────────
    Helpers (match Profile.jsx behavior)

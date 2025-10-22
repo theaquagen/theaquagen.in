@@ -8,7 +8,7 @@ import Button from "../../../components/ui/Button";
 import { Field, Input, Label } from "@headlessui/react";
 import clsx from "clsx";
 
-import { GradientBackground } from "../../../components/ui/gradient";
+import { GradientBackground } from "../../../components/ui/Gradient";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
