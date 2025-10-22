@@ -1,4 +1,3 @@
-// src/pages/user/MarketplaceNew.jsx
 import { useMemo, useState, useEffect } from "react";
 import { collection, doc, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
 import { db, auth } from "../../firebase";
@@ -8,7 +7,35 @@ import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
 import ImageUploader from "../../components/ImageUploader";
 import { sendEmailVerification } from "firebase/auth";
-import { slugify, ddmmFromDOB } from "../../utils/slug";
+
+/* ──────────────────────────────────────────────────────────────
+   Minimal helpers (fallback only; signup should have created slug)
+   ────────────────────────────────────────────────────────────── */
+function slugify(raw) {
+  return String(raw || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/--+/g, "-");
+}
+function ddmmFromDOB(dob) {
+  try {
+    let d;
+    if (!dob) return "";
+    if (typeof dob === "string") {
+      const m = dob.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      d = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`) : new Date(dob);
+    } else if (typeof dob?.toDate === "function") d = dob.toDate();
+    else if (dob instanceof Date) d = dob;
+    else if (typeof dob === "number") d = new Date(dob);
+    if (!d || isNaN(d.getTime())) return "";
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    return `${dd}${mm}`;
+  } catch { return ""; }
+}
+const onlyDigits = (s) => String(s || "").replace(/\D+/g, "");
+const last4Digits = (s) => onlyDigits(s).slice(-4);
 
 const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"];
 
@@ -49,48 +76,45 @@ export default function MarketplaceNew() {
     }
   };
 
-  // Ensure a slug exists (auto-generate if needed) and return { sellerSlug, displayName, avatar }
-  const ensurePublicSlug = async () => {
-    // 1) load public profile
+  // Read profile; if missing slug (legacy), try to create it here as a fallback
+  const ensurePublicPresence = async () => {
     const profRef = doc(db, "profiles", user.uid);
     const profSnap = await getDoc(profRef);
-    let profile = profSnap.exists() ? profSnap.data() : {};
-
-    if (profile.sellerSlug) {
+    if (profSnap.exists() && profSnap.data()?.sellerSlug) {
+      const p = profSnap.data();
       return {
-        sellerSlug: profile.sellerSlug,
-        displayName: profile.displayName || auth.currentUser?.displayName || auth.currentUser?.email || "Seller",
-        avatar: profile.avatar || auth.currentUser?.photoURL || "",
+        sellerSlug: p.sellerSlug,
+        displayName: p.displayName || auth.currentUser?.displayName || auth.currentUser?.email || "Seller",
+        avatar: p.avatar || auth.currentUser?.photoURL || "",
       };
     }
 
-    // 2) no slug → generate candidate from private users doc
+    // Fallback path: derive from private users doc (should be rare)
     const pvtSnap = await getDoc(doc(db, "users", user.uid));
     const pvt = pvtSnap.exists() ? pvtSnap.data() : {};
     const first = pvt.firstName || "";
     const last = pvt.lastName || "";
-    const base = slugify(`${first}-${last}`) || slugify((auth.currentUser?.email || "").split("@")[0]) || `user-${user.uid.slice(0,6)}`;
+    const baseName = `${first} ${last}`.trim();
+    const base = slugify(baseName || (auth.currentUser?.email || "").split("@")[0] || `user-${user.uid.slice(0,6)}`);
+    const birth = ddmmFromDOB(pvt.dateOfBirth);
+    const last4 = last4Digits(pvt.phone || pvt.phoneE164);
 
-    let candidate = base;
-    // If taken by someone else, add -ddmm from DOB; if still taken, add random suffix until free
-    const ddmm = ddmmFromDOB(pvt.dateOfBirth || pvt.dob);
-    const tryClaim = async (s) => {
-      const ref = doc(db, "usernames", s);
+    // simple inline claim (no duplicates)
+    const tryClaim = async (slug) => {
+      const ref = doc(db, "usernames", slug);
       const snap = await getDoc(ref);
-      if (snap.exists()) {
-        return snap.data().uid === user.uid ? s : null;
-      }
+      if (snap.exists()) return null;
       await setDoc(ref, { uid: user.uid });
-      return s;
+      return slug;
     };
 
-    let claimed = await tryClaim(candidate);
-    if (!claimed && ddmm) claimed = await tryClaim(`${base}-${ddmm}`);
-    let counter = 0;
-    while (!claimed && counter < 10) {
-      const suffix = Math.floor(100 + Math.random() * 900); // 3 digits
-      claimed = await tryClaim(`${base}-${suffix}`);
-      counter++;
+    let claimed = await tryClaim(base);
+    if (!claimed && birth) claimed = await tryClaim(`${base}-${birth}`);
+    if (!claimed && birth && last4) claimed = await tryClaim(`${base}-${birth}${last4}`);
+    if (!claimed && !birth && last4) claimed = await tryClaim(`${base}-${last4}`);
+    for (let i = 0; !claimed && i < 10; i++) {
+      const sfx = Math.floor(100 + Math.random() * 900);
+      claimed = await tryClaim(`${base}-${sfx}`);
     }
     if (!claimed) throw new Error("Could not create a unique username. Try again.");
 
@@ -100,9 +124,8 @@ export default function MarketplaceNew() {
       auth.currentUser?.email ||
       "Seller";
 
-    const avatar = profile.avatar || auth.currentUser?.photoURL || "";
+    const avatar = auth.currentUser?.photoURL || "";
 
-    // 3) write public profile with new slug
     await setDoc(profRef, {
       displayName,
       avatar,
@@ -125,8 +148,8 @@ export default function MarketplaceNew() {
 
     setLoading(true);
     try {
-      // make sure we have a slug (auto-claim if needed)
-      const { sellerSlug, displayName, avatar } = await ensurePublicSlug();
+      // should already exist from signup; fallback if legacy
+      const { sellerSlug, displayName, avatar } = await ensurePublicPresence();
 
       const payload = {
         ownerId: user.uid,

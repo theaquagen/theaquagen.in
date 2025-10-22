@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import Button from "../ui/Button";
 import { useAuth } from "../../context/AuthContext";
+import Navbar from "./Navbar";
 
 export default function UserHeader() {
     const { user, logout } = useAuth();
@@ -23,6 +24,7 @@ export default function UserHeader() {
                     </nav>
                 )}
             </div>
+            <Navbar/>
         </header>
     );
 }

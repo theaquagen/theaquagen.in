@@ -27,7 +27,6 @@ import Dashboard from "./pages/admin/Dashboard";
 export default function App() {
     return (
         <Routes>
-            {/* Auth pages (users) — logged-in users cannot access */}
             <Route element={<RedirectIfAuthed target="/" />}>
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />
@@ -50,7 +49,6 @@ export default function App() {
 
             {/* Admin area */}
             <Route path="/admin" element={<AdminLayout />}>
-                {/* Logged-in admins should not access /admin/login */}
                 <Route
                     element={<RedirectIfAuthed adminOnly target="/admin/dashboard" />}
                 >
