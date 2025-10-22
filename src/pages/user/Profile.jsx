@@ -11,8 +11,17 @@ import { updateProfile, sendEmailVerification } from "firebase/auth";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
 import { UserCircleIcon } from "@heroicons/react/24/solid";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CalendarDaysIcon,
+  XMarkIcon,
+} from "@heroicons/react/20/solid";
 import { Container } from "../../components/ui/Container";
 
+/* ──────────────────────────────────────────────────────────────
+   Shared helpers
+   ────────────────────────────────────────────────────────────── */
 function slugify(raw) {
   return String(raw || "")
     .toLowerCase()
@@ -72,6 +81,45 @@ function last4Digits(value) {
   return digits.slice(-4);
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Calendar helpers (ported from Testimonials page)
+   ────────────────────────────────────────────────────────────── */
+function fmtYmd(date) {
+  const y = date.getFullYear();
+  const m = `${date.getMonth() + 1}`.padStart(2, "0");
+  const d = `${date.getDate()}`.padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+/** Parse 'YYYY-MM-DD' as a LOCAL date (avoid UTC off-by-one) */
+function parseYmdLocal(ymd) {
+  const [y, m, d] = (ymd || "").split("-").map((s) => parseInt(s, 10));
+  if (!y || !m || !d) return new Date();
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+}
+function weekdayMon0(date) { return (date.getDay() + 6) % 7; } // Monday=0
+function addDays(date, n) { const d = new Date(date); d.setDate(d.getDate() + n); return d; }
+function getMonthGrid(viewYear, viewMonth, selectedYmd) {
+  const todayYmd = fmtYmd(new Date());
+  const first = new Date(viewYear, viewMonth, 1);
+  const offset = weekdayMon0(first);
+  const start = addDays(first, -offset);
+  const days = [];
+  for (let i = 0; i < 42; i++) {
+    const d = addDays(start, i);
+    const ymd = fmtYmd(d);
+    days.push({
+      date: ymd,
+      isToday: ymd === todayYmd,
+      isSelected: selectedYmd ? ymd === selectedYmd : false,
+      isCurrentMonth: d.getMonth() === viewMonth,
+    });
+  }
+  return days;
+}
+function classNames(...classes) {
+  return classes.filter(Boolean).join(" ");
+}
+
 /* ────────────────────────────────────────────────────────────── */
 
 export default function Profile() {
@@ -104,6 +152,70 @@ export default function Profile() {
   const debTimer = useRef(null);
   const didLoadRef = useRef(false);
   const lastSavedPrivRef = useRef(null); // holds last saved snapshot to avoid redundant writes
+
+  /* -------- Calendar state for DOB (ported UI) -------- */
+  const [isCalOpen, setIsCalOpen] = useState(false);
+  const calRef = useRef(null);
+  const anchorRef = useRef(null);
+
+  const baseDob = pvt.dateOfBirth ? parseYmdLocal(pvt.dateOfBirth) : new Date();
+  const [viewYear, setViewYear] = useState(baseDob.getFullYear());
+  const [viewMonth, setViewMonth] = useState(baseDob.getMonth());
+
+  const days = useMemo(
+    () => getMonthGrid(viewYear, viewMonth, pvt.dateOfBirth),
+    [viewYear, viewMonth, pvt.dateOfBirth]
+  );
+  const monthLabel = useMemo(
+    () =>
+      new Date(viewYear, viewMonth, 1).toLocaleDateString(undefined, {
+        month: "long",
+        year: "numeric",
+      }),
+    [viewYear, viewMonth]
+  );
+  const openCalendar = () => {
+    const d = pvt.dateOfBirth ? parseYmdLocal(pvt.dateOfBirth) : new Date();
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+    setIsCalOpen(true);
+  };
+  const closeCalendar = () => setIsCalOpen(false);
+  const goPrevMonth = () => {
+    const d = new Date(viewYear, viewMonth - 1, 1);
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+  };
+  const goNextMonth = () => {
+    const d = new Date(viewYear, viewMonth + 1, 1);
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+  };
+  useEffect(() => {
+    if (isCalOpen && calRef.current) {
+      calRef.current.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }
+  }, [isCalOpen]);
+  useEffect(() => {
+    if (!isCalOpen) return;
+    const onDocClick = (e) => {
+      if (
+        calRef.current &&
+        !calRef.current.contains(e.target) &&
+        anchorRef.current &&
+        !anchorRef.current.contains(e.target)
+      ) {
+        closeCalendar();
+      }
+    };
+    const onKey = (e) => { if (e.key === "Escape") closeCalendar(); };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [isCalOpen]);
 
   /* ──────────────────────────────────────────────────────────────
      Username availability check
@@ -519,236 +631,348 @@ export default function Profile() {
 
   return (
     <Container>
-    <div className="space-y-8">
-      {/* Header / quick link */}
-      <div className="flex items-center justify-between">
-        <div className="text-xl font-semibold">Profile</div>
-        {pub.sellerSlug && (
-          <a className="text-sm underline" href={`/s/${pub.sellerSlug}`}>View public profile</a>
+      <div className="space-y-8">
+        {/* Header / quick link */}
+        <div className="flex items-center justify-between">
+          <div className="text-xl font-semibold">Profile</div>
+          {pub.sellerSlug && (
+            <a className="text-sm underline" href={`/s/${pub.sellerSlug}`}>View public profile</a>
+          )}
+        </div>
+
+        {/* Email verification notice */}
+        {!auth.currentUser.emailVerified && (
+          <div className="rounded-lg border bg-amber-50 p-3 text-sm">
+            Your email is not verified. Some actions (like posting) are blocked.
+            <div className="mt-2">
+              <Button size="sm" onClick={() => sendEmailVerification(auth.currentUser)}>
+                Resend verification email
+              </Button>
+            </div>
+          </div>
         )}
-      </div>
 
-      {/* Email verification notice */}
-      {!auth.currentUser.emailVerified && (
-        <div className="rounded-lg border bg-amber-50 p-3 text-sm">
-          Your email is not verified. Some actions (like posting) are blocked.
-          <div className="mt-2">
-            <Button size="sm" onClick={() => sendEmailVerification(auth.currentUser)}>
-              Resend verification email
-            </Button>
+        {/* PERSONAL INFORMATION (avatar at top) */}
+        <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
+          <div>
+            <h2 className="text-base/7 font-semibold text-gray-900">Personal Information</h2>
+            <p className="mt-1 text-sm/6 text-gray-600">Use a permanent address where you can receive mail.</p>
           </div>
-        </div>
-      )}
 
-      {/* PERSONAL INFORMATION (avatar at top) */}
-      <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
-        <div>
-          <h2 className="text-base/7 font-semibold text-gray-900">Personal Information</h2>
-          <p className="mt-1 text-sm/6 text-gray-600">Use a permanent address where you can receive mail.</p>
-        </div>
+          <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6 md:col-span-2">
+            {/* Photo */}
+            <div className="col-span-full">
+              <label htmlFor="photo" className="block text-sm/6 font-medium text-gray-900">
+                Photo
+              </label>
+              <div className="mt-2 flex items-center gap-x-3">
+                {pub.avatar ? (
+                  <img src={pub.avatar} alt="Avatar" className="size-12 rounded-full object-cover" />
+                ) : (
+                  <UserCircleIcon aria-hidden="true" className="size-12 text-gray-300" />
+                )}
+                <button
+                  type="button"
+                  onClick={onChangeAvatarClick}
+                  disabled={busyAvatar}
+                  className={`rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 ${busyAvatar ? "opacity-60 cursor-not-allowed" : ""}`}
+                >
+                  {busyAvatar ? "Uploading..." : "Change"}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={onPickAvatar}
+                />
+              </div>
+            </div>
 
-        <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6 md:col-span-2">
-          {/* Photo */}
-          <div className="col-span-full">
-            <label htmlFor="photo" className="block text-sm/6 font-medium text-gray-900">
-              Photo
-            </label>
-            <div className="mt-2 flex items-center gap-x-3">
-              {pub.avatar ? (
-                <img src={pub.avatar} alt="Avatar" className="size-12 rounded-full object-cover" />
-              ) : (
-                <UserCircleIcon aria-hidden="true" className="size-12 text-gray-300" />
+            {/* First / Last name */}
+            <div className="sm:col-span-3">
+              <label htmlFor="first-name" className="block text-sm/6 font-medium text-gray-900">
+                First name
+              </label>
+              <div className="mt-2">
+                <input
+                  id="first-name"
+                  name="first-name"
+                  type="text"
+                  autoComplete="given-name"
+                  value={pvt.firstName}
+                  onChange={(e)=>setPvt({...pvt, firstName: e.target.value})}
+                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
+                />
+              </div>
+            </div>
+            <div className="sm:col-span-3">
+              <label htmlFor="last-name" className="block text-sm/6 font-medium text-gray-900">
+                Last name
+              </label>
+              <div className="mt-2">
+                <input
+                  id="last-name"
+                  name="last-name"
+                  type="text"
+                  autoComplete="family-name"
+                  value={pvt.lastName}
+                  onChange={(e)=>setPvt({...pvt, lastName: e.target.value})}
+                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
+                />
+              </div>
+            </div>
+
+            {/* Email (read only) */}
+            <div className="sm:col-span-4">
+              <label htmlFor="email" className="block text-sm/6 font-medium text-gray-900">
+                Email address
+              </label>
+              <div className="mt-2">
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  value={user.email || ""}
+                  readOnly
+                  className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
+                />
+              </div>
+            </div>
+
+            {/* Date of birth — Calendar popover (ported) */}
+            <div className="sm:col-span-3 relative">
+              <label className="block text-sm/6 font-medium text-gray-900">
+                Date of birth
+              </label>
+
+              <div className="mt-2">
+                <button
+                  ref={anchorRef}
+                  type="button"
+                  onClick={() => (isCalOpen ? closeCalendar() : openCalendar())}
+                  className="flex w-full items-center justify-between rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-base text-gray-900 outline-none focus:ring-2 focus:ring-indigo-600"
+                  aria-haspopup="dialog"
+                  aria-expanded={isCalOpen}
+                >
+                  <span className={pvt.dateOfBirth ? "" : "text-gray-500"}>
+                    {pvt.dateOfBirth
+                      ? parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                        })
+                      : "Select date"}
+                  </span>
+                  <CalendarDaysIcon className="size-5 text-gray-400" aria-hidden="true" />
+                </button>
+              </div>
+
+              {isCalOpen && (
+                <div
+                  ref={calRef}
+                  role="dialog"
+                  aria-label="Choose date of birth"
+                  className="absolute left-0 right-0 z-20 mt-2 w-full overflow-hidden rounded-2xl border bg-white shadow-xl"
+                >
+                  <div className="p-4">
+                    <div className="flex items-center">
+                      <h3 className="flex-auto text-sm font-semibold text-gray-900">
+                        {monthLabel}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={goPrevMonth}
+                        className="-my-1.5 flex flex-none items-center justify-center p-1.5 text-gray-400 hover:text-gray-500"
+                      >
+                        <span className="sr-only">Previous month</span>
+                        <ChevronLeftIcon aria-hidden="true" className="size-5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={goNextMonth}
+                        className="-my-1.5 -mr-1.5 ml-2 flex flex-none items-center justify-center p-1.5 text-gray-400 hover:text-gray-500"
+                      >
+                        <span className="sr-only">Next month</span>
+                        <ChevronRightIcon aria-hidden="true" className="size-5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeCalendar}
+                        className="ml-2 -my-1.5 flex flex-none items-center justify-center p-1.5 text-gray-400 hover:text-gray-500"
+                      >
+                        <span className="sr-only">Close</span>
+                        <XMarkIcon aria-hidden="true" className="size-5" />
+                      </button>
+                    </div>
+
+                    <div className="mt-6 grid grid-cols-7 text-center text-xs/6 text-gray-500">
+                      <div>M</div>
+                      <div>T</div>
+                      <div>W</div>
+                      <div>T</div>
+                      <div>F</div>
+                      <div>S</div>
+                      <div>S</div>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-7 text-sm">
+                      {days.map((day, dayIdx) => (
+                        <div
+                          key={day.date}
+                          data-first-line={dayIdx <= 6 ? "" : undefined}
+                          className="py-2 not-data-first-line:border-t not-data-first-line:border-gray-200"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPvt((prev) => ({ ...prev, dateOfBirth: day.date }));
+                              closeCalendar();
+                            }}
+                            data-is-today={day.isToday ? "" : undefined}
+                            data-is-selected={day.isSelected ? "" : undefined}
+                            data-is-current-month={day.isCurrentMonth ? "" : undefined}
+                            className="mx-auto flex size-8 items-center justify-center rounded-full not-data-is-selected:not-data-is-today:not-data-is-current-month:text-gray-400 not-data-is-selected:hover:bg-gray-200 not-data-is-selected:not-data-is-today:data-is-current-month:text-gray-900 data-is-selected:font-semibold data-is-selected:text-white data-is-selected:not-data-is-today:bg-gray-900 data-is-today:font-semibold not-data-is-selected:data-is-today:text-indigo-600 data-is-selected:data-is-today:bg-indigo-600"
+                          >
+                            <time dateTime={day.date}>
+                              {day.date.split("-").pop().replace(/^0/, "")}
+                            </time>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between border-t pt-3 text-xs text-gray-600">
+                      <span>
+                        {pvt.dateOfBirth
+                          ? `Selected: ${parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            })}`
+                          : "No date selected"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ymd = fmtYmd(new Date());
+                          setPvt((prev)=>({ ...prev, dateOfBirth: ymd }));
+                          const d = new Date();
+                          setViewYear(d.getFullYear());
+                          setViewMonth(d.getMonth());
+                        }}
+                        className="rounded px-2 py-1 hover:bg-gray-100"
+                      >
+                        Today
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
-              <button
-                type="button"
-                onClick={onChangeAvatarClick}
-                disabled={busyAvatar}
-                className={`rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 ${busyAvatar ? "opacity-60 cursor-not-allowed" : ""}`}
-              >
-                {busyAvatar ? "Uploading..." : "Change"}
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={onPickAvatar}
-              />
             </div>
-          </div>
 
-          {/* First / Last name */}
-          <div className="sm:col-span-3">
-            <label htmlFor="first-name" className="block text-sm/6 font-medium text-gray-900">
-              First name
-            </label>
-            <div className="mt-2">
-              <input
-                id="first-name"
-                name="first-name"
-                type="text"
-                autoComplete="given-name"
-                value={pvt.firstName}
-                onChange={(e)=>setPvt({...pvt, firstName: e.target.value})}
-                className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
+            {/* District */}
+            <div className="sm:col-span-3">
+              <label htmlFor="district" className="block text-sm/6 font-medium text-gray-900">
+                District
+              </label>
+              <div className="mt-2">
+                <input
+                  id="district"
+                  name="district"
+                  type="text"
+                  autoComplete="address-level2"
+                  placeholder="Your district"
+                  value={pvt.district}
+                  onChange={(e)=>setPvt({...pvt, district: e.target.value})}
+                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
+                />
+              </div>
             </div>
-          </div>
-          <div className="sm:col-span-3">
-            <label htmlFor="last-name" className="block text-sm/6 font-medium text-gray-900">
-              Last name
-            </label>
-            <div className="mt-2">
-              <input
-                id="last-name"
-                name="last-name"
-                type="text"
-                autoComplete="family-name"
-                value={pvt.lastName}
-                onChange={(e)=>setPvt({...pvt, lastName: e.target.value})}
-                className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
-            </div>
-          </div>
 
-          {/* Email (read only) */}
-          <div className="sm:col-span-4">
-            <label htmlFor="email" className="block text-sm/6 font-medium text-gray-900">
-              Email address
-            </label>
-            <div className="mt-2">
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                value={user.email || ""}
-                readOnly
-                className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
+            {/* Phone (formatted UI) */}
+            <div className="sm:col-span-3">
+              <label htmlFor="phone" className="block text-sm/6 font-medium text-gray-900">
+                Phone
+              </label>
+              <div className="mt-2">
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  placeholder="+1 (555) 123-4567"
+                  value={phoneFormatted}
+                  onChange={(e)=>{
+                    const raw = e.target.value;
+                    setPvt((prev)=>({ ...prev, phone: raw }));
+                  }}
+                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
+                />
+                <p className="text-xs text-neutral-500 mt-1">Stored as E.164: {phoneE164}</p>
+              </div>
             </div>
-          </div>
 
-          {/* Date of birth */}
-          <div className="sm:col-span-3">
-            <label htmlFor="dob" className="block text-sm/6 font-medium text-gray-900">
-              Date of birth
-            </label>
-            <div className="mt-2">
-              <input
-                id="dob"
-                name="dob"
-                type="date"
-                value={pvt.dateOfBirth}
-                onChange={(e)=>setPvt({...pvt, dateOfBirth: e.target.value})}
-                className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
+            {/* Save private details (manual fallback) */}
+            <div className="col-span-full">
+              <Button onClick={()=>savePrivate(false)} loading={savingPriv}>
+                Save private details
+              </Button>
             </div>
-          </div>
-
-          {/* District */}
-          <div className="sm:col-span-3">
-            <label htmlFor="district" className="block text-sm/6 font-medium text-gray-900">
-              District
-            </label>
-            <div className="mt-2">
-              <input
-                id="district"
-                name="district"
-                type="text"
-                autoComplete="address-level2"
-                placeholder="Your district"
-                value={pvt.district}
-                onChange={(e)=>setPvt({...pvt, district: e.target.value})}
-                className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
-            </div>
-          </div>
-
-          {/* Phone (formatted UI) */}
-          <div className="sm:col-span-3">
-            <label htmlFor="phone" className="block text-sm/6 font-medium text-gray-900">
-              Phone
-            </label>
-            <div className="mt-2">
-              <input
-                id="phone"
-                name="phone"
-                type="tel"
-                placeholder="+1 (555) 123-4567"
-                value={phoneFormatted}
-                onChange={(e)=>{
-                  // accept raw typing; store as "raw" in pvt.phone (digits-only or mixed)
-                  // The input shows formatted version from derived state
-                  const raw = e.target.value;
-                  setPvt((prev)=>({ ...prev, phone: raw }));
-                }}
-                className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
-              <p className="text-xs text-neutral-500 mt-1">Stored as E.164: {phoneE164}</p>
-            </div>
-          </div>
-
-          {/* Save private details (manual fallback) */}
-          <div className="col-span-full">
-            <Button onClick={()=>savePrivate(false)} loading={savingPriv}>
-              Save private details
-            </Button>
           </div>
         </div>
+
+        {/* PUBLIC PROFILE */}
+        <div className="grid grid-cols-1 gap-x-8 gap-y-10 md:grid-cols-3">
+          <div>
+            <h2 className="text-base/7 font-semibold text-gray-900">Public profile</h2>
+            <p className="mt-1 text-sm/6 text-gray-600">Control how your profile appears to others.</p>
+          </div>
+
+          <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-6 md:col-span-2">
+            {/* Display name is computed and readOnly */}
+            <div className="sm:col-span-3">
+              <label className="block text-sm/6 font-medium text-gray-900">Display name</label>
+              <div className="mt-2">
+                <input
+                  type="text"
+                  value={pub.displayName}
+                  readOnly
+                  className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6"
+                />
+                <p className="mt-1 text-xs text-gray-500">Display name comes from your first & last name.</p>
+              </div>
+            </div>
+
+            {/* Username (slug) — auto-generated; user can edit */}
+            <div className="sm:col-span-3">
+              <label className="block text-sm/6 font-medium text-gray-900">Username (slug)</label>
+              <div className="mt-2">
+                <input
+                  type="text"
+                  value={pub.sellerSlug}
+                  onChange={(e)=>setPub({...pub, sellerSlug: e.target.value.toLowerCase()})}
+                  placeholder="e.g. akash-ramasani"
+                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
+                />
+                <p className="text-xs text-neutral-500 mt-1">
+                  Public URL: <code>/s/{slugify(pub.sellerSlug) || "your-name"}</code>
+                </p>
+              </div>
+            </div>
+
+            <div className="col-span-full">
+              <Button onClick={savePublic} loading={savingPub}>
+                Save public profile
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Messages */}
+        {err && <p className="text-sm text-rose-600">{err}</p>}
+        {msg && <p className="text-sm text-green-700">{msg}</p>}
       </div>
-
-      {/* PUBLIC PROFILE */}
-      <div className="grid grid-cols-1 gap-x-8 gap-y-10 md:grid-cols-3">
-        <div>
-          <h2 className="text-base/7 font-semibold text-gray-900">Public profile</h2>
-          <p className="mt-1 text-sm/6 text-gray-600">Control how your profile appears to others.</p>
-        </div>
-
-        <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-6 md:col-span-2">
-          {/* Display name is computed and readOnly */}
-          <div className="sm:col-span-3">
-            <label className="block text-sm/6 font-medium text-gray-900">Display name</label>
-            <div className="mt-2">
-              <input
-                type="text"
-                value={pub.displayName}
-                readOnly
-                className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6"
-              />
-              <p className="mt-1 text-xs text-gray-500">Display name comes from your first & last name.</p>
-            </div>
-          </div>
-
-          {/* Username (slug) — auto-generated; user can edit */}
-          <div className="sm:col-span-3">
-            <label className="block text-sm/6 font-medium text-gray-900">Username (slug)</label>
-            <div className="mt-2">
-              <input
-                type="text"
-                value={pub.sellerSlug}
-                onChange={(e)=>setPub({...pub, sellerSlug: e.target.value.toLowerCase()})}
-                placeholder="e.g. akash-ramasani"
-                className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
-              />
-              <p className="text-xs text-neutral-500 mt-1">
-                Public URL: <code>/s/{slugify(pub.sellerSlug) || "your-name"}</code>
-              </p>
-            </div>
-          </div>
-
-          <div className="col-span-full">
-            <Button onClick={savePublic} loading={savingPub}>
-              Save public profile
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Messages */}
-      {err && <p className="text-sm text-rose-600">{err}</p>}
-      {msg && <p className="text-sm text-green-700">{msg}</p>}
-    </div>
     </Container>
   );
 }
