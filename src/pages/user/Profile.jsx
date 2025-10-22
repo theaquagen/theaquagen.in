@@ -1,10 +1,11 @@
 // src/pages/user/Profile.jsx
 import { useEffect, useRef, useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { db, auth, storage } from "../../firebase";
 import {
   doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp,
-  collection, query, where, getDocs, writeBatch, limit as fsLimit, startAfter
+  collection, query, where, getDocs, writeBatch, limit as fsLimit, startAfter, orderBy
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { updateProfile, sendEmailVerification } from "firebase/auth";
@@ -121,6 +122,8 @@ function classNames(...classes) {
 }
 
 /* ────────────────────────────────────────────────────────────── */
+
+const PAGE_SIZE = 12;
 
 export default function Profile() {
   const { user } = useAuth();
@@ -548,6 +551,62 @@ export default function Profile() {
   };
 
   /* ──────────────────────────────────────────────────────────────
+     Your marketplace listings (paginated)
+     ────────────────────────────────────────────────────────────── */
+  const [items, setItems] = useState([]);
+  const [loadingItems, setLoadingItems] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [endReached, setEndReached] = useState(false);
+  const lastDocRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingItems(true);
+        const q = query(
+          collection(db, "items"),
+          where("ownerId", "==", user.uid),
+          orderBy("createdAt", "desc"),
+          fsLimit(PAGE_SIZE)
+        );
+        const snap = await getDocs(q);
+        if (cancelled) return;
+        setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        lastDocRef.current = snap.docs[snap.docs.length - 1] || null;
+        if (snap.size < PAGE_SIZE) setEndReached(true);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (!cancelled) setLoadingItems(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid]);
+
+  const loadMore = async () => {
+    if (endReached || loadingMore || !lastDocRef.current) return;
+    setLoadingMore(true);
+    try {
+      const q = query(
+        collection(db, "items"),
+        where("ownerId", "==", user.uid),
+        orderBy("createdAt", "desc"),
+        fsLimit(PAGE_SIZE),
+        startAfter(lastDocRef.current)
+      );
+      const snap = await getDocs(q);
+      setItems((prev) => [...prev, ...snap.docs.map((d) => ({ id: d.id, ...d.data() }))]);
+      lastDocRef.current = snap.docs[snap.docs.length - 1] || null;
+      if (snap.size < PAGE_SIZE) setEndReached(true);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  /* ──────────────────────────────────────────────────────────────
      Skeleton (mirrors the exact layout)
      ────────────────────────────────────────────────────────────── */
   const Skeleton = () => (
@@ -632,12 +691,9 @@ export default function Profile() {
   return (
     <Container>
       <div className="space-y-8">
-        {/* Header / quick link */}
+        {/* Header (removed "View public profile" link) */}
         <div className="flex items-center justify-between">
           <div className="text-xl font-semibold">Profile</div>
-          {pub.sellerSlug && (
-            <a className="text-sm underline" href={`/s/${pub.sellerSlug}`}>View public profile</a>
-          )}
         </div>
 
         {/* Email verification notice */}
@@ -922,8 +978,8 @@ export default function Profile() {
           </div>
         </div>
 
-        {/* PUBLIC PROFILE */}
-        <div className="grid grid-cols-1 gap-x-8 gap-y-10 md:grid-cols-3">
+        {/* PUBLIC PROFILE (now with divider below to separate from listings) */}
+        <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
           <div>
             <h2 className="text-base/7 font-semibold text-gray-900">Public profile</h2>
             <p className="mt-1 text-sm/6 text-gray-600">Control how your profile appears to others.</p>
@@ -940,7 +996,7 @@ export default function Profile() {
                   readOnly
                   className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6"
                 />
-                <p className="mt-1 text-xs text-gray-500">Display name comes from your first & last name.</p>
+                <p className="mt-1 text-xs text-gray-500">Display name comes from your first &amp; last name.</p>
               </div>
             </div>
 
@@ -969,10 +1025,64 @@ export default function Profile() {
           </div>
         </div>
 
+        {/* MARKETPLACE LISTINGS — same two-column style */}
+        <div className="grid grid-cols-1 gap-x-8 gap-y-10 md:grid-cols-3">
+          <div>
+            <h2 className="text-base/7 font-semibold text-gray-900">Your marketplace listings</h2>
+            <p className="mt-1 text-sm/6 text-gray-600">All items you’ve posted in the marketplace.</p>
+          </div>
+
+          <div className="md:col-span-2">
+            {loadingItems ? (
+              <div className="text-sm text-neutral-500">Loading…</div>
+            ) : (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {items.map((it) => <ItemCard key={it.id} it={it} />)}
+                </div>
+
+                {items.length === 0 && (
+                  <div className="text-sm text-neutral-500">You haven’t posted any items yet.</div>
+                )}
+
+                <div className="mt-4 flex justify-center">
+                  {!endReached && items.length > 0 && (
+                    <Button onClick={loadMore} loading={loadingMore} loadingText="Loading…">
+                      Load more
+                    </Button>
+                  )}
+                  {endReached && items.length > 0 && (
+                    <div className="text-xs text-neutral-500">You’ve reached the end.</div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
         {/* Messages */}
         {err && <p className="text-sm text-rose-600">{err}</p>}
         {msg && <p className="text-sm text-green-700">{msg}</p>}
       </div>
     </Container>
+  );
+}
+
+function ItemCard({ it }) {
+  const thumb = it.images?.[0]?.optimizedURL || it.images?.[0]?.originalURL;
+  return (
+    <Link to={`/marketplace/${it.id}`} className="rounded-lg border bg-white overflow-hidden flex flex-col">
+      {thumb ? (
+        <img src={thumb} alt={it.title} className="h-40 w-full object-cover" />
+      ) : (
+        <div className="h-40 w-full grid place-items-center text-neutral-400">No image</div>
+      )}
+      <div className="p-3 space-y-1">
+        <div className="font-medium line-clamp-1">{it.title}</div>
+        <div className="text-sm text-neutral-600">
+          ${Number(it.price).toFixed(2)} • {it.location} • {it.category || "Other"}
+        </div>
+      </div>
+    </Link>
   );
 }
