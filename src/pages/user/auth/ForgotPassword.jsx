@@ -1,21 +1,25 @@
 // src/pages/user/ForgotPassword.jsx
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "../../../firebase";
+
 import Button from "../../../components/ui/Button";
-import Input from "../../../components/ui/Input";
+import { Field, Input, Label } from "@headlessui/react";
+import clsx from "clsx";
+
+import { GradientBackground } from "../../../components/ui/gradient";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
-  
   const [msg, setMsg] = useState("");
-  
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    setErr(""); setMsg("");
+    setErr("");
+    setMsg("");
     setLoading(true);
     try {
       await sendPasswordResetEmail(auth, email);
@@ -28,17 +32,61 @@ export default function ForgotPassword() {
   };
 
   return (
-    <div className="mx-auto max-w-md space-y-4">
-      <h1 className="text-xl font-semibold">Forgot Password</h1>
-      <form onSubmit={onSubmit} className="space-y-3 bg-white p-4 rounded-lg border">
-        <div>
-          <label className="text-sm">Email</label>
-          <Input type="email" value={email} onChange={(e)=>setEmail(e.target.value)} required />
+    <main className="overflow-hidden bg-gray-50">
+      <GradientBackground />
+      <div className="isolate flex min-h-dvh items-center justify-center p-6 lg:p-8">
+        <div className="w-full max-w-md rounded-xl bg-white shadow-md ring-1 ring-black/5">
+          <form onSubmit={onSubmit} className="p-7 sm:p-11">
+            <h1 className="text-base/6 font-medium">Forgot your password?</h1>
+            <p className="mt-1 text-sm/5 text-gray-600">
+              Enter your email and we’ll send you a reset link.
+            </p>
+
+            <Field className="mt-8 space-y-3">
+              <Label className="text-sm/5 font-medium">Email</Label>
+              <Input
+                required
+                type="email"
+                name="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={clsx(
+                  "block w-full rounded-lg border border-transparent shadow-sm ring-1 ring-black/10",
+                  "px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-base/6 sm:text-sm/6",
+                  "data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+                )}
+              />
+            </Field>
+
+            {msg && <p className="mt-4 text-sm text-green-700">{msg}</p>}
+            {err && <p className="mt-4 text-sm text-red-600">{err}</p>}
+
+            <div className="mt-8">
+              <Button
+                type="submit"
+                className="w-full"
+                loading={loading}
+                loadingText="Sending reset email…"
+              >
+                Send reset email
+              </Button>
+            </div>
+
+            <div className="mt-6 text-sm/5">
+              <Link to="/login" className="font-medium hover:text-gray-600">
+                Back to sign in
+              </Link>
+            </div>
+          </form>
+
+          <div className="m-1.5 rounded-lg bg-gray-50 py-4 text-center text-sm/5 ring-1 ring-black/5">
+            Don’t have an account?{" "}
+            <Link to="/signup" className="font-medium hover:text-gray-600">
+              Create an account
+            </Link>
+          </div>
         </div>
-        {msg && <p className="text-green-700 text-sm">{msg}</p>}
-        {err && <p className="text-red-600 text-sm">{err}</p>}
-        <Button type="submit" className="w-full" loading={loading} loadingText="Sending reset email…">Send reset email</Button>
-      </form>
-    </div>
+      </div>
+    </main>
   );
 }

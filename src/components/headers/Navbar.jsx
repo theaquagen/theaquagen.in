@@ -476,10 +476,10 @@ export function Navbar() {
       { to: '/about', label: 'About' },
       { to: '/marketplace', label: 'Marketplace' },
     ]
-    if (user) {
-      return [...base, { to: '/profile', label: 'Profile' }, { label: 'Logout', onClick: handleLogout, isButton: true }]
+    if (!user) {
+      return [...base, { to: '/login', label: 'Login' }]
     }
-    return [...base, { to: '/login', label: 'Login' }, { to: '/signup', label: 'Signup' }]
+      return [...base, { to: '/profile', label: 'Profile' }, { label: 'Logout', onClick: handleLogout, isButton: true }]
   }, [user])
 
   const adminLinks = useMemo(() => {
