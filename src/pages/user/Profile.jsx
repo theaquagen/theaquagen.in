@@ -777,7 +777,7 @@ export default function Profile() {
 
             {/* Phone (India-only) */}
             <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">Phone (India)</label>
+              <label className="block text-sm/6 font-medium text-gray-900">Phone</label>
               <div className="mt-2">
                 <input type="tel" placeholder="+91 98765 43210"
                   value={phoneFormatted}
