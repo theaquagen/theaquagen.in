@@ -33,7 +33,6 @@ export default function App() {
                 <Route path="/forgot-password" element={<ForgotPassword />} />
             </Route>
 
-            {/* User area */}
             <Route element={<UserLayout />}>
                 <Route element={<RequireAuth />}>
                     <Route path="/" element={<Home />} />

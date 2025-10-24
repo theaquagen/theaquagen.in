@@ -1,5 +1,5 @@
 // src/pages/user/Marketplace.jsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection, getDoc, doc, getDocs, query, where, orderBy, limit, startAfter,
   onSnapshot
@@ -10,26 +10,21 @@ import { Link } from "react-router-dom";
 import Button from "../../components/ui/Button";
 import { Container } from "../../components/ui/Container";
 
-// Headless UI + Icons
+// Headless UI
 import {
-  Dialog,
-  DialogBackdrop,
-  DialogPanel,
   Disclosure,
   DisclosureButton,
   DisclosurePanel,
   Menu,
   MenuButton,
   MenuItem,
-  MenuItems,
-} from '@headlessui/react'
-import { XMarkIcon } from '@heroicons/react/24/outline'
-import { ChevronDownIcon, FunnelIcon, MinusIcon, PlusIcon, Squares2X2Icon } from '@heroicons/react/20/solid'
+  MenuItems
+} from '@headlessui/react';
+import { ChevronDownIcon, FunnelIcon } from '@heroicons/react/20/solid';
 
 const PAGE_SIZE = 12;
-const CATEGORIES = ["All","Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"];
+const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"]; // omit "All" because this UI is multi-select
 
-// Sort options mapped to your state values
 const SORT_OPTIONS = [
   { name: 'Newest', value: 'newest' },
   { name: 'Price: Low to High', value: 'priceAsc' },
@@ -40,17 +35,29 @@ function classNames(...classes) {
   return classes.filter(Boolean).join(' ')
 }
 
+// ---- Filter UI data (matches your snippet style) ----
+const PRICE_BUCKETS = [
+  { value: '0', label: '$0 - $25' },
+  { value: '25', label: '$25 - $50' },
+  { value: '50', label: '$50 - $75' },
+  { value: '75', label: '$75+' },
+];
+
+const buildCategoryOptions = () =>
+  CATEGORIES.map((c) => ({ value: c, label: c }));
+
 export default function Marketplace() {
   const { user } = useAuth();
 
-  // Query state
-  const [district, setDistrict] = useState("");
-  const [locationFilter, setLocationFilter] = useState("all"); // "all" | "myDistrict"
-  const [category, setCategory] = useState("All");
-  const [sort, setSort] = useState("newest"); // newest | priceAsc | priceDesc
+  // Filters state (multi-select like your UI)
+  const [selectedPrices, setSelectedPrices] = useState(new Set()); // '0' | '25' | '50' | '75'
+  const [selectedCategories, setSelectedCategories] = useState(new Set()); // values from CATEGORIES
+  // (Optional placeholders for future: color/size UI kept but not wired to query)
+  const [selectedColors, setSelectedColors] = useState(new Set());
+  const [selectedSizes, setSelectedSizes] = useState(new Set());
 
-  // UI state
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  // Sort
+  const [sort, setSort] = useState("newest");
 
   // Data state
   const [items, setItems] = useState([]);
@@ -60,11 +67,12 @@ export default function Marketplace() {
   const lastDocRef = useRef(null);
   const [favIds, setFavIds] = useState(new Set());
 
-  // Load user's district
+  // Load user's profile (kept for favorites path only)
   useEffect(() => {
+    // No district/location UI in this version; only favorites uses user.uid
+    // Still safe to check user doc if you want other metadata later:
     (async () => {
-      const snap = await getDoc(doc(db, "users", user.uid));
-      setDistrict(snap.exists() ? snap.data().district || "" : "");
+      try { await getDoc(doc(db, "users", user.uid)); } catch {}
     })();
   }, [user.uid]);
 
@@ -76,22 +84,26 @@ export default function Marketplace() {
     return () => unsub();
   }, [user.uid]);
 
-  // Build Firestore query
+  // ----- Query builder (server-side filters: categories + sort, pagination) -----
   const buildQuery = (cursor) => {
     const constraints = [];
-    if (locationFilter === "myDistrict" && district) constraints.push(where("location", "==", district));
-    if (category && category !== "All") constraints.push(where("category", "==", category));
+    // Category filter via "in" when 1-10 selected; otherwise no category constraint
+    const catArr = Array.from(selectedCategories);
+    if (catArr.length > 0 && catArr.length <= 10) {
+      constraints.push(where("category", "in", catArr));
+    }
+    // Sorting
     if (sort === "priceAsc") constraints.push(orderBy("price", "asc"));
     else if (sort === "priceDesc") constraints.push(orderBy("price", "desc"));
     else constraints.push(orderBy("createdAt", "desc"));
+
     constraints.push(limit(PAGE_SIZE));
     if (cursor) constraints.push(startAfter(cursor));
     return query(collection(db, "items"), ...constraints);
   };
 
-  // Fetch on filter/sort change
+  // ----- Fetch on filter/sort change (server-side piece only) -----
   useEffect(() => {
-    if (locationFilter === "myDistrict" && !district) return;
     let cancelled = false;
     (async () => {
       setLoading(true); setEndReached(false);
@@ -107,9 +119,9 @@ export default function Marketplace() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locationFilter, district, category, sort]);
+  }, [sort, selectedCategories]); // price/color/size are client-side filters
 
-  // Pagination
+  // Pagination (continues the same server-side constraints)
   const loadMore = async () => {
     if (endReached || loadingMore) return;
     setLoadingMore(true);
@@ -123,345 +135,273 @@ export default function Marketplace() {
     finally { setLoadingMore(false); }
   };
 
-  // Helper: reset
-  const resetAll = () => {
-    setLocationFilter("all");
-    setCategory("All");
+  // ----- Client-side filters (Price, and placeholders for color/size) -----
+  const priceInBuckets = (price, bucketsSet) => {
+    if (!bucketsSet || bucketsSet.size === 0) return true;
+    const p = Number(price) || 0;
+    // bucket '0' => [0,25), '25' => [25,50), '50' => [50,75), '75' => [75, +inf)
+    const matches = [];
+    if (bucketsSet.has('0'))  matches.push(p >= 0 && p < 25);
+    if (bucketsSet.has('25')) matches.push(p >= 25 && p < 50);
+    if (bucketsSet.has('50')) matches.push(p >= 50 && p < 75);
+    if (bucketsSet.has('75')) matches.push(p >= 75);
+    return matches.some(Boolean);
+  };
+
+  const filteredItems = useMemo(() => {
+    // Price filter only (color/size placeholders included for future)
+    return items.filter((it) => {
+      const okPrice = priceInBuckets(it.price, selectedPrices);
+      // If you later add fields like it.color / it.size, apply here:
+      const okColor = selectedColors.size === 0 ? true : selectedColors.has((it.color || '').toLowerCase());
+      const okSize  = selectedSizes.size === 0 ? true : selectedSizes.has((it.size  || '').toLowerCase());
+      return okPrice && okColor && okSize;
+    });
+  }, [items, selectedPrices, selectedColors, selectedSizes]);
+
+  // ----- UI handlers -----
+  const toggleInSet = (set, value) => {
+    const next = new Set(set);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    return next;
+  };
+
+  const clearAll = () => {
+    setSelectedPrices(new Set());
+    setSelectedCategories(new Set());
+    setSelectedColors(new Set());
+    setSelectedSizes(new Set());
     setSort("newest");
   };
 
+  const activeFilterCount =
+    (selectedPrices.size ? 1 : 0) +
+    (selectedCategories.size ? 1 : 0) +
+    (selectedColors.size ? 1 : 0) +
+    (selectedSizes.size ? 1 : 0);
+
+  // ---- Render ----
   return (
     <Container>
-      <div>
-        {/* Mobile Filters Dialog */}
-        <Dialog open={mobileFiltersOpen} onClose={setMobileFiltersOpen} className="relative z-40 lg:hidden">
-          <DialogBackdrop
-            transition
-            className="fixed inset-0 bg-black/25 transition-opacity duration-300 ease-linear data-closed:opacity-0"
-          />
-          <div className="fixed inset-0 z-40 flex">
-            <DialogPanel
-              transition
-              className="relative ml-auto flex size-full max-w-xs transform flex-col overflow-y-auto bg-white pt-4 pb-6 shadow-xl transition duration-300 ease-in-out data-closed:translate-x-full"
-            >
-              <div className="flex items-center justify-between px-4">
-                <h2 className="text-lg font-medium text-gray-900">Filters</h2>
-                <button
-                  type="button"
-                  onClick={() => setMobileFiltersOpen(false)}
-                  className="relative -mr-2 flex size-10 items-center justify-center rounded-md bg-white p-2 text-gray-400 hover:bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                >
-                  <span className="absolute -inset-0.5" />
-                  <span className="sr-only">Close menu</span>
-                  <XMarkIcon aria-hidden="true" className="size-6" />
+      <div className="bg-white">
+        <div className="px-4 py-16 text-center sm:px-6 lg:px-8">
+          <h1 className="text-4xl font-bold tracking-tight text-gray-900">Marketplace</h1>
+          <p className="mx-auto mt-4 max-w-xl text-base text-gray-500">
+            Browse items from your community. Use filters or sort to find your next great deal.
+          </p>
+        </div>
+
+        {/* Filters (Disclosure bar + panel) */}
+        <Disclosure
+          as="section"
+          aria-labelledby="filter-heading"
+          className="grid items-center border-t border-b border-gray-200"
+        >
+          <h2 id="filter-heading" className="sr-only">
+            Filters
+          </h2>
+
+          {/* Left: filter toggle + count, Clear all */}
+          <div className="relative col-start-1 row-start-1 py-4">
+            <div className="mx-auto flex max-w-7xl divide-x divide-gray-200 px-4 text-sm sm:px-6 lg:px-8">
+              <div className="pr-6">
+                <DisclosureButton className="group flex items-center font-medium text-gray-700">
+                  <FunnelIcon aria-hidden="true" className="mr-2 size-5 flex-none text-gray-400 group-hover:text-gray-500" />
+                  {activeFilterCount || 0} Filter{activeFilterCount === 1 ? '' : 's'}
+                </DisclosureButton>
+              </div>
+              <div className="pl-6">
+                <button type="button" onClick={clearAll} className="text-gray-500 hover:text-gray-700">
+                  Clear all
                 </button>
               </div>
-
-              {/* Filters */}
-              <form
-                className="mt-4 border-t border-gray-200"
-                onSubmit={(e)=>{e.preventDefault(); setMobileFiltersOpen(false);}}
-              >
-                {/* Categories quick list */}
-                <h3 className="sr-only">Categories</h3>
-                <ul role="list" className="px-2 py-3 font-medium text-gray-900">
-                  {CATEGORIES.map((c) => (
-                    <li key={c}>
-                      <button
-                        type="button"
-                        onClick={() => setCategory(c)}
-                        className={classNames(
-                          "block w-full text-left px-2 py-3 rounded-md",
-                          c === category ? "bg-gray-100" : ""
-                        )}
-                      >
-                        {c}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-
-                {/* Location */}
-                <Disclosure as="div" className="border-t border-gray-200 px-4 py-6">
-                  <h3 className="-mx-2 -my-3 flow-root">
-                    <DisclosureButton className="group flex w-full items-center justify-between bg-white px-2 py-3 text-gray-400 hover:text-gray-500">
-                      <span className="font-medium text-gray-900">Location</span>
-                      <span className="ml-6 flex items-center">
-                        <PlusIcon aria-hidden="true" className="size-5 group-data-open:hidden" />
-                        <MinusIcon aria-hidden="true" className="size-5 group-not-data-open:hidden" />
-                      </span>
-                    </DisclosureButton>
-                  </h3>
-                  <DisclosurePanel className="pt-6">
-                    <div className="space-y-4">
-                      {[
-                        { value: "all", label: "All locations" },
-                        { value: "myDistrict", label: district ? `My district (${district})` : "My district (not set)" , disabled: !district}
-                      ].map((opt) => (
-                        <label key={opt.value} className="flex items-center gap-3 text-gray-600">
-                          <input
-                            type="radio"
-                            name="mobile-location"
-                            className="size-4"
-                            value={opt.value}
-                            disabled={opt.disabled}
-                            checked={locationFilter === opt.value}
-                            onChange={(e)=>setLocationFilter(e.target.value)}
-                          />
-                          {opt.label}
-                        </label>
-                      ))}
-                    </div>
-                  </DisclosurePanel>
-                </Disclosure>
-
-                {/* Sort */}
-                <Disclosure as="div" className="border-t border-gray-200 px-4 py-6">
-                  <h3 className="-mx-2 -my-3 flow-root">
-                    <DisclosureButton className="group flex w-full items-center justify-between bg-white px-2 py-3 text-gray-400 hover:text-gray-500">
-                      <span className="font-medium text-gray-900">Sort</span>
-                      <span className="ml-6 flex items-center">
-                        <PlusIcon aria-hidden="true" className="size-5 group-data-open:hidden" />
-                        <MinusIcon aria-hidden="true" className="size-5 group-not-data-open:hidden" />
-                      </span>
-                    </DisclosureButton>
-                  </h3>
-                  <DisclosurePanel className="pt-6">
-                    <div className="space-y-4">
-                      {SORT_OPTIONS.map((o) => (
-                        <label key={o.value} className="flex items-center gap-3 text-gray-600">
-                          <input
-                            type="radio"
-                            name="mobile-sort"
-                            className="size-4"
-                            value={o.value}
-                            checked={sort === o.value}
-                            onChange={(e)=>setSort(e.target.value)}
-                          />
-                          {o.name}
-                        </label>
-                      ))}
-                    </div>
-                  </DisclosurePanel>
-                </Disclosure>
-
-                <div className="px-4 pt-6">
-                  <Button type="submit" className="w-full">Apply filters</Button>
-                </div>
-                <div className="px-4 pt-3">
-                  <Button type="button" variant="outline" className="w-full" onClick={() => { resetAll(); }}>
-                    Reset filters
-                  </Button>
-                </div>
-              </form>
-            </DialogPanel>
+            </div>
           </div>
-        </Dialog>
 
-        {/* Page Header */}
-        <main>
-          <div className="flex items-baseline justify-between border-b border-gray-200 pt-24 pb-6">
-            <h1 className="text-4xl font-bold tracking-tight text-gray-900">Marketplace</h1>
+          {/* Filter content */}
+          <DisclosurePanel className="border-t border-gray-200 py-10">
+            <div className="mx-auto grid max-w-7xl grid-cols-2 gap-x-4 px-4 text-sm sm:px-6 md:gap-x-6 lg:px-8">
+              {/* Left column */}
+              <div className="grid auto-rows-min grid-cols-1 gap-y-10 md:grid-cols-2 md:gap-x-6">
+                {/* Price */}
+                <fieldset>
+                  <legend className="block font-medium">Price</legend>
+                  <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
+                    {PRICE_BUCKETS.map((option, optionIdx) => (
+                      <div key={option.value} className="flex gap-3">
+                        <input
+                          id={`price-${optionIdx}`}
+                          name="price[]"
+                          type="checkbox"
+                          className="size-4"
+                          checked={selectedPrices.has(option.value)}
+                          onChange={() => setSelectedPrices(prev => toggleInSet(prev, option.value))}
+                        />
+                        <label htmlFor={`price-${optionIdx}`} className="text-base text-gray-600 sm:text-sm">
+                          {option.label}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </fieldset>
 
-            <div className="flex items-center">
-              {/* Sort Menu */}
-              <Menu as="div" className="relative inline-block text-left">
-                <MenuButton className="group inline-flex justify-center text-sm font-medium text-gray-700 hover:text-gray-900">
-                  Sort
-                  <ChevronDownIcon
-                    aria-hidden="true"
-                    className="-mr-1 ml-1 size-5 shrink-0 text-gray-400 group-hover:text-gray-500"
-                  />
-                </MenuButton>
+                {/* (Optional) Color – UI only for now */}
+                <fieldset>
+                  <legend className="block font-medium">Color</legend>
+                  <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
+                    {["white","beige","blue","brown","green","purple"].map((c, idx) => (
+                      <div key={c} className="flex gap-3">
+                        <input
+                          id={`color-${idx}`}
+                          name="color[]"
+                          type="checkbox"
+                          className="size-4"
+                          checked={selectedColors.has(c)}
+                          onChange={() => setSelectedColors(prev => toggleInSet(prev, c))}
+                        />
+                        <label htmlFor={`color-${idx}`} className="text-base text-gray-600 sm:text-sm">
+                          {c[0].toUpperCase() + c.slice(1)}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
+
+              {/* Right column */}
+              <div className="grid auto-rows-min grid-cols-1 gap-y-10 md:grid-cols-2 md:gap-x-6">
+                {/* (Optional) Size – UI only for now */}
+                <fieldset>
+                  <legend className="block font-medium">Size</legend>
+                  <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
+                    {["xs","s","m","l","xl","2xl"].map((s, idx) => (
+                      <div key={s} className="flex gap-3">
+                        <input
+                          id={`size-${idx}`}
+                          name="size[]"
+                          type="checkbox"
+                          className="size-4"
+                          checked={selectedSizes.has(s)}
+                          onChange={() => setSelectedSizes(prev => toggleInSet(prev, s))}
+                        />
+                        <label htmlFor={`size-${idx}`} className="text-base text-gray-600 sm:text-sm">
+                          {s.toUpperCase()}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </fieldset>
+
+                {/* Category (wired to Firestore via "in") */}
+                <fieldset>
+                  <legend className="block font-medium">Category</legend>
+                  <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
+                    {buildCategoryOptions().map((option, optionIdx) => (
+                      <div key={option.value} className="flex gap-3">
+                        <input
+                          id={`category-${optionIdx}`}
+                          name="category[]"
+                          type="checkbox"
+                          className="size-4"
+                          checked={selectedCategories.has(option.value)}
+                          onChange={() => setSelectedCategories(prev => toggleInSet(prev, option.value))}
+                        />
+                        <label htmlFor={`category-${optionIdx}`} className="text-base text-gray-600 sm:text-sm">
+                          {option.label}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
+            </div>
+          </DisclosurePanel>
+
+          {/* Right: Sort menu */}
+          <div className="col-start-1 row-start-1 py-4">
+            <div className="mx-auto flex max-w-7xl justify-end px-4 sm:px-6 lg:px-8">
+              <Menu as="div" className="relative inline-block">
+                <div className="flex">
+                  <MenuButton className="group inline-flex justify-center text-sm font-medium text-gray-700 hover:text-gray-900">
+                    Sort
+                    <ChevronDownIcon
+                      aria-hidden="true"
+                      className="-mr-1 ml-1 size-5 shrink-0 text-gray-400 group-hover:text-gray-500"
+                    />
+                  </MenuButton>
+                </div>
 
                 <MenuItems
                   transition
                   className="absolute right-0 z-10 mt-2 w-56 origin-top-right rounded-md bg-white shadow-2xl ring-1 ring-black/5 transition focus:outline-hidden data-closed:scale-95 data-closed:transform data-closed:opacity-0 data-enter:duration-100 data-enter:ease-out data-leave:duration-75 data-leave:ease-in"
                 >
                   <div className="py-1">
-                    {SORT_OPTIONS.map((option) => (
-                      <MenuItem key={option.value}>
+                    {SORT_OPTIONS.map((o) => (
+                      <MenuItem key={o.value}>
                         <button
-                          onClick={() => setSort(option.value)}
+                          onClick={() => setSort(o.value)}
                           className={classNames(
-                            sort === option.value ? 'font-medium text-gray-900' : 'text-gray-600',
-                            'block w-full text-left px-4 py-2 text-sm data-focus:bg-gray-100 data-focus:outline-hidden',
+                            sort === o.value ? 'font-medium text-gray-900' : 'text-gray-500',
+                            'block w-full text-left px-4 py-2 text-sm data-focus:bg-gray-100 data-focus:outline-hidden'
                           )}
                         >
-                          {option.name}
+                          {o.name}
                         </button>
                       </MenuItem>
                     ))}
                   </div>
                 </MenuItems>
               </Menu>
-
-              {/* Grid icon (non-functional placeholder from your UI) */}
-              <button type="button" className="-m-2 ml-5 p-2 text-gray-400 hover:text-gray-500 sm:ml-7">
-                <span className="sr-only">View grid</span>
-                <Squares2X2Icon aria-hidden="true" className="size-5" />
-              </button>
-
-              {/* Mobile Filters trigger */}
-              <button
-                type="button"
-                onClick={() => setMobileFiltersOpen(true)}
-                className="-m-2 ml-4 p-2 text-gray-400 hover:text-gray-500 sm:ml-6 lg:hidden"
-              >
-                <span className="sr-only">Filters</span>
-                <FunnelIcon aria-hidden="true" className="size-5" />
-              </button>
             </div>
           </div>
+        </Disclosure>
 
-          {/* Content */}
-          <section aria-labelledby="products-heading" className="pt-6 pb-24">
-            <h2 id="products-heading" className="sr-only">
-              Products
-            </h2>
+        {/* Content */}
+        <main className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pb-24">
+          <section aria-labelledby="products-heading" className="pt-6">
+            <h2 id="products-heading" className="sr-only">Products</h2>
 
-            <div className="grid grid-cols-1 gap-x-8 gap-y-10 lg:grid-cols-4">
-              {/* Sidebar Filters (Desktop) */}
-              <form className="hidden lg:block">
-                {/* Categories */}
-                <h3 className="sr-only">Categories</h3>
-                <ul role="list" className="space-y-4 border-b border-gray-200 pb-6 text-sm font-medium text-gray-900">
-                  {CATEGORIES.map((c) => (
-                    <li key={c}>
-                      <button
-                        type="button"
-                        onClick={() => setCategory(c)}
-                        className={classNames(
-                          "hover:underline",
-                          c === category ? "text-gray-900" : "text-gray-700"
-                        )}
-                      >
-                        {c}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-
-                {/* Location */}
-                <Disclosure as="div" className="border-b border-gray-200 py-6">
-                  <h3 className="-my-3 flow-root">
-                    <DisclosureButton className="group flex w-full items-center justify-between bg-white py-3 text-sm text-gray-400 hover:text-gray-500">
-                      <span className="font-medium text-gray-900">Location</span>
-                      <span className="ml-6 flex items-center">
-                        <PlusIcon aria-hidden="true" className="size-5 group-data-open:hidden" />
-                        <MinusIcon aria-hidden="true" className="size-5 group-not-data-open:hidden" />
-                      </span>
-                    </DisclosureButton>
-                  </h3>
-                  <DisclosurePanel className="pt-6">
-                    <div className="space-y-4">
-                      {[
-                        { value: "all", label: "All locations" },
-                        { value: "myDistrict", label: district ? `My district (${district})` : "My district (not set)", disabled: !district }
-                      ].map((opt, idx) => (
-                        <div key={opt.value} className="flex gap-3">
-                          <input
-                            id={`filter-location-${idx}`}
-                            type="radio"
-                            name="desktop-location"
-                            className="size-4"
-                            value={opt.value}
-                            disabled={opt.disabled}
-                            checked={locationFilter === opt.value}
-                            onChange={(e)=>setLocationFilter(e.target.value)}
-                          />
-                          <label htmlFor={`filter-location-${idx}`} className="text-sm text-gray-600">
-                            {opt.label}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  </DisclosurePanel>
-                </Disclosure>
-
-                {/* Sort (for convenience in sidebar too) */}
-                <Disclosure as="div" className="border-b border-gray-200 py-6">
-                  <h3 className="-my-3 flow-root">
-                    <DisclosureButton className="group flex w-full items-center justify-between bg-white py-3 text-sm text-gray-400 hover:text-gray-500">
-                      <span className="font-medium text-gray-900">Sort</span>
-                      <span className="ml-6 flex items-center">
-                        <PlusIcon aria-hidden="true" className="size-5 group-data-open:hidden" />
-                        <MinusIcon aria-hidden="true" className="size-5 group-not-data-open:hidden" />
-                      </span>
-                    </DisclosureButton>
-                  </h3>
-                  <DisclosurePanel className="pt-6">
-                    <div className="space-y-4">
-                      {SORT_OPTIONS.map((o, idx) => (
-                        <div key={o.value} className="flex gap-3">
-                          <input
-                            id={`filter-sort-${idx}`}
-                            type="radio"
-                            name="desktop-sort"
-                            className="size-4"
-                            value={o.value}
-                            checked={sort === o.value}
-                            onChange={(e)=>setSort(e.target.value)}
-                          />
-                          <label htmlFor={`filter-sort-${idx}`} className="text-sm text-gray-600">
-                            {o.name}
-                          </label>
-                        </div>
-                      ))}
-                    </div>
-                  </DisclosurePanel>
-                </Disclosure>
-
-                <div className="pt-6">
-                  <Button
-                    variant="outline"
-                    onClick={(e)=>{ e.preventDefault(); resetAll(); }}
-                  >
-                    Reset filters
-                  </Button>
-                </div>
-              </form>
-
-              {/* Product grid */}
-              <div className="lg:col-span-3">
-                <div className="flex items-center justify-between gap-3 pb-4">
-                  <div className="text-sm text-neutral-600">
-                    Showing <span className="font-medium">{items.length}</span>{' '}
-                    item{items.length === 1 ? '' : 's'}
-                    {category !== "All" ? ` in ${category}` : '' }
-                    {locationFilter === "myDistrict" && district ? ` near ${district}` : ''}
-                    {items.length === 0 && " — try different filters"}
-                  </div>
-                  <Link to="/marketplace/new"><Button>Sell an item</Button></Link>
-                </div>
-
-                {loading ? (
-                  <div className="text-sm text-neutral-500">Loading…</div>
-                ) : (
-                  <>
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                      {items.map((it) => (
-                        <ItemCard key={it.id} it={it} isFav={favIds.has(it.id)} />
-                      ))}
-                    </div>
-                    {items.length === 0 && (
-                      <div className="text-sm text-neutral-500 pt-6">No items match your filters.</div>
-                    )}
-                  </>
-                )}
-
-                {/* Pagination */}
-                <div className="flex justify-center pt-8">
-                  {!endReached && items.length > 0 && (
-                    <Button onClick={loadMore} loading={loadingMore} loadingText="Loading…">
-                      Load more
-                    </Button>
-                  )}
-                  {endReached && items.length > 0 && (
-                    <div className="text-xs text-neutral-500">You’ve reached the end.</div>
-                  )}
-                </div>
+            <div className="flex items-center justify-between gap-3 pb-4">
+              <div className="text-sm text-neutral-600">
+                Showing <span className="font-medium">{filteredItems.length}</span>{' '}
+                item{filteredItems.length === 1 ? '' : 's'}
+                {selectedCategories.size > 0 ? ` in ${Array.from(selectedCategories).join(', ')}` : ''}
+                {filteredItems.length === 0 && " — try different filters"}
               </div>
+              <div className="flex items-center gap-3">
+                <button className="text-xs text-gray-500 hover:underline" type="button" onClick={clearAll}>
+                  Reset all
+                </button>
+                <Link to="/marketplace/new"><Button>Sell an item</Button></Link>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="text-sm text-neutral-500">Loading…</div>
+            ) : (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {filteredItems.map((it) => (
+                    <ItemCard key={it.id} it={it} isFav={favIds.has(it.id)} />
+                  ))}
+                </div>
+                {filteredItems.length === 0 && (
+                  <div className="text-sm text-neutral-500 pt-6">No items match your filters.</div>
+                )}
+              </>
+            )}
+
+            {/* Pagination (loads more server items; client filters still apply after append) */}
+            <div className="flex justify-center pt-8">
+              {!endReached && items.length > 0 && (
+                <Button onClick={loadMore} loading={loadingMore} loadingText="Loading…">
+                  Load more
+                </Button>
+              )}
+              {endReached && items.length > 0 && (
+                <div className="text-xs text-neutral-500">You’ve reached the end.</div>
+              )}
             </div>
           </section>
         </main>
@@ -492,7 +432,6 @@ function ItemCard({ it, isFav }) {
           ${Number(it.price).toFixed(2)} • {it.location} • {it.category || "Other"}
         </div>
 
-        {/* Uploader → /s/:slug (clickable) */}
         {slug ? (
           <Link to={`/s/${slug}`} className="flex items-center gap-2 pt-1">
             <div className="h-6 w-6 rounded-full overflow-hidden bg-neutral-100 border">

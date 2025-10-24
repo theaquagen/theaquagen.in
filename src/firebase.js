@@ -5,6 +5,7 @@ import {
     setPersistence,
     browserLocalPersistence,
 } from "firebase/auth";
+
 import { getFirestore } from "firebase/firestore";
 
 import { getStorage } from "firebase/storage";
@@ -22,6 +23,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 const auth = getAuth(app);
+
 setPersistence(auth, browserLocalPersistence);
 
 const db = getFirestore(app, 'theaquagen');
