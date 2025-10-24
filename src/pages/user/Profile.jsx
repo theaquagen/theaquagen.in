@@ -18,6 +18,8 @@ import {
 } from "@heroicons/react/20/solid";
 import { Container } from "../../components/ui/Container";
 
+import PageHeading from "../../components/ui/PageHeading";
+
 /* ───────────── Helpers ───────────── */
 function slugify(raw) {
   return String(raw || "")
@@ -209,6 +211,42 @@ export default function Profile() {
 
   /* NEW: lock flag after 3 name updates */
   const nameLocked = nameChangeCount >= 3;
+
+  /* ───────────── NEW: Month nav handlers ───────────── */
+  const goPrevMonth = () => {
+    setViewMonth((m) => {
+      if (m === 0) {
+        setViewYear((y) => y - 1);
+        return 11;
+      }
+      return m - 1;
+    });
+  };
+
+  const goNextMonth = () => {
+    setViewMonth((m) => {
+      if (m === 11) {
+        setViewYear((y) => y + 1);
+        return 0;
+      }
+      return m + 1;
+    });
+  };
+
+  /* ───────────── NEW: Close calendar on outside click ───────────── */
+  useEffect(() => {
+    if (!isCalOpen) return;
+    const onClick = (e) => {
+      const cal = calRef.current;
+      const anchor = anchorRef.current;
+      if (!cal) return;
+      if (cal.contains(e.target)) return;
+      if (anchor && anchor.contains(e.target)) return;
+      setIsCalOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [isCalOpen]);
 
   /* Initial load */
   useEffect(() => {
@@ -608,15 +646,15 @@ export default function Profile() {
   if (loading) return <Skeleton />;
 
   return (
+    <>
     <Container>
-      <div className="space-y-8">
+      <div className="space-y-8 mt-16">
         <div className="flex items-center justify-between">
-          <div className="text-xl font-semibold">Profile</div>
-          <div className="text-xs text-gray-600">
+        <PageHeading title="Profile" />
+        <div className="text-xs text-gray-600">
             Name changes used: {nameChangeCount}/3
           </div>
         </div>
-
         {!auth.currentUser.emailVerified && (
           <div className="rounded-lg border bg-amber-50 p-3 text-sm">
             Your email is not verified. Some actions (like posting) are blocked.
@@ -740,9 +778,18 @@ export default function Profile() {
                     <div className="mt-2 grid grid-cols-7 text-sm">
                       {days.map((day) => (
                         <div key={day.date} className="py-2 not-first:border-t not-first:border-gray-200">
-                          <button type="button"
-                            onClick={() => { setPvt((prev)=>({ ...prev, dateOfBirth: day.date })); setIsCalOpen(false); }}
-                            className="mx-auto flex size-8 items-center justify-center rounded-full hover:bg-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // keep calendar view in sync with chosen date
+                              setPvt((prev)=>({ ...prev, dateOfBirth: day.date }));
+                              const d = parseYmdLocal(day.date);
+                              setViewYear(d.getFullYear());
+                              setViewMonth(d.getMonth());
+                              setIsCalOpen(false);
+                            }}
+                            className="mx-auto flex size-8 items-center justify-center rounded-full hover:bg-gray-200"
+                          >
                             <time dateTime={day.date}>{day.date.split("-").pop().replace(/^0/,"")}</time>
                           </button>
                         </div>
@@ -754,11 +801,19 @@ export default function Profile() {
                           ? `Selected: ${parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
                           : "No date selected"}
                       </span>
-                      <button type="button" onClick={() => {
-                        const ymd = fmtYmd(new Date());
-                        setPvt((prev)=>({ ...prev, dateOfBirth: ymd }));
-                        const d = new Date(); setViewYear(d.getFullYear()); setViewMonth(d.getMonth());
-                      }} className="rounded px-2 py-1 hover:bg-gray-100">Today</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ymd = fmtYmd(new Date());
+                          setPvt((prev)=>({ ...prev, dateOfBirth: ymd }));
+                          const d = new Date();
+                          setViewYear(d.getFullYear());
+                          setViewMonth(d.getMonth());
+                        }}
+                        className="rounded px-2 py-1 hover:bg-gray-100"
+                      >
+                        Today
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -810,7 +865,7 @@ export default function Profile() {
               <div className="mt-2">
                 <input type="text" value={pub.displayName} readOnly
                   className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6" />
-                <p className="mt-1 text-xs text-gray-500">Comes from your first &amp; last name.</p>
+                <p className="mt-1 text-xs text-neutral-500">Comes from your first &amp; last name.</p>
               </div>
             </div>
 
@@ -842,6 +897,7 @@ export default function Profile() {
         {msg && <p className="text-sm text-green-700">{msg}</p>}
       </div>
     </Container>
+    </>
   );
 }
 
