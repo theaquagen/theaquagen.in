@@ -1,4 +1,3 @@
-// src/pages/user/ForgotPassword.jsx
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { sendPasswordResetEmail } from "firebase/auth";
@@ -10,22 +9,22 @@ import clsx from "clsx";
 
 import { GradientBackground } from "../../../components/ui/Gradient";
 
+import { useToast } from "../../../components/Toast/ToastProvider"; // 👈 Import useToast
+
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const { showToast } = useToast(); // 👈 Use the toast hook
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    setErr("");
-    setMsg("");
     setLoading(true);
     try {
       await sendPasswordResetEmail(auth, email);
-      setMsg("Password reset email sent.");
+      showToast("Password reset email sent.", "success"); // ✅ Success toast
     } catch (e) {
-      setErr(e.message);
+      showToast("Error: " + e.message, "error"); // ✅ Error toast
     } finally {
       setLoading(false);
     }
@@ -57,9 +56,6 @@ export default function ForgotPassword() {
                 )}
               />
             </Field>
-
-            {msg && <p className="mt-4 text-sm text-green-700">{msg}</p>}
-            {err && <p className="mt-4 text-sm text-red-600">{err}</p>}
 
             <div className="mt-8">
               <Button

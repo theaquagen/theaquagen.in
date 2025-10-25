@@ -8,8 +8,9 @@ import { Checkbox, Field, Input, Label } from "@headlessui/react";
 import clsx from "clsx";
 
 import Button from "../../../components/ui/Button";
-
 import { GradientBackground } from "../../../components/ui/Gradient";
+
+import { useToast } from "../../../components/Toast/ToastProvider"; // 👈 Import useToast
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -22,7 +23,8 @@ export default function Login() {
   const loc = useLocation();
   const from = loc.state?.from?.pathname || "/";
 
-  // Load remembered email if available
+  const { showToast } = useToast(); // 👈 Use the toast hook
+
   useEffect(() => {
     const rememberedEmail = localStorage.getItem("rememberedEmail");
     if (rememberedEmail) {
@@ -44,9 +46,11 @@ export default function Login() {
         localStorage.removeItem("rememberedEmail");
       }
 
+      showToast("Signed in successfully!", "success"); // ✅ Success toast
       nav(from, { replace: true });
     } catch (e) {
       setErr(e.message);
+      showToast("Login failed: " + e.message, "error"); // ✅ Error toast
     } finally {
       setLoading(false);
     }
