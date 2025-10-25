@@ -1,3 +1,5 @@
+
+
 import { useMemo, useState, useEffect } from "react";
 import { collection, doc, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
 import { db, auth, storage } from "../../firebase";
@@ -20,50 +22,15 @@ function slugify(raw) {
     .replace(/^-+|-+$/g, "")
     .replace(/--+/g, "-");
 }
-function ddmmFromDOB(dob) {
-  try {
-    let d;
-    if (!dob) return "";
-    if (typeof dob === "string") {
-      const m = dob.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      d = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`) : new Date(dob);
-    } else if (typeof dob?.toDate === "function") d = dob.toDate();
-    else if (dob instanceof Date) d = dob;
-    else if (typeof dob === "number") d = new Date(dob);
-    if (!d || isNaN(d.getTime())) return "";
-    const dd = String(d.getUTCDate()).padStart(2, "0");
-    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-    return `${dd}${mm}`;
-  } catch {
-    return "";
-  }
-}
-const onlyDigits = (s) => String(s || "").replace(/\D+/g, "");
-const last4Digits = (s) => onlyDigits(s).slice(-4);
 
-const CATEGORIES = [
-  "Electronics",
-  "Fashion",
-  "Home",
-  "Vehicles",
-  "Sports",
-  "Books",
-  "Toys",
-  "Other",
-];
+const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"];
 
 export default function MarketplaceNew() {
   const { user } = useAuth();
   const nav = useNavigate();
 
   const itemId = useMemo(() => doc(collection(db, "items")).id, []);
-  const [form, setForm] = useState({
-    title: "",
-    price: "",
-    location: "",
-    category: "Other",
-    description: "",
-  });
+  const [form, setForm] = useState({ title: "", price: "", location: "", category: "Other", description: "" });
 
   // Uploaded images -> { url, path, name }
   const [uploaded, setUploaded] = useState([]);
@@ -74,13 +41,13 @@ export default function MarketplaceNew() {
   const [loading, setLoading] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
 
+  // Prefill location from private profile
   useEffect(() => {
     (async () => {
       try {
         const snap = await getDoc(doc(db, "users", user.uid));
-        const district = snap.exists() ? snap.data().district || "" : "";
-        if (district && !form.location)
-          setForm((f) => ({ ...f, location: district }));
+        const district = snap.exists() ? (snap.data().district || "") : "";
+        if (district && !form.location) setForm((f)=>({ ...f, location: district }));
       } catch {}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,18 +57,13 @@ export default function MarketplaceNew() {
 
   const resendVerification = async () => {
     setSendingEmail(true);
-    setErr("");
-    setMsg("");
-    try {
-      await sendEmailVerification(auth.currentUser);
-      setMsg("Verification email sent. Check your inbox.");
-    } catch (e) {
-      setErr(e.message || "Failed to send verification email.");
-    } finally {
-      setSendingEmail(false);
-    }
+    setErr(""); setMsg("");
+    try { await sendEmailVerification(auth.currentUser); setMsg("Verification email sent. Check your inbox."); }
+    catch (e) { setErr(e.message || "Failed to send verification email."); }
+    finally { setSendingEmail(false); }
   };
 
+  // Upload to: marketplace/{uid}/{itemId}/original/{fileName}
   const handleFileSelect = async (e) => {
     const selected = Array.from(e.target.files || []);
     const imagesOnly = selected.filter((f) => f.type.startsWith("image/"));
@@ -112,10 +74,11 @@ export default function MarketplaceNew() {
     try {
       const uploads = await Promise.all(
         imagesOnly.map(async (file, idx) => {
-          const safeName = slugify(file.name) || `image-${Date.now()}-${idx}`;
-          const path = `items/${user.uid}/${itemId}/${Date.now()}_${idx}_${safeName}`;
+          if (file.size > 10 * 1024 * 1024) throw new Error(`"${file.name}" exceeds 10MB.`);
+          const base = slugify(file.name.replace(/\.(heic|heif)$/i, ".heic")) || `image-${Date.now()}-${idx}`;
+          const path = `marketplace/${user.uid}/${itemId}/original/${Date.now()}_${idx}_${base}`;
           const storageRef = ref(storage, path);
-          await uploadBytes(storageRef, file);
+          await uploadBytes(storageRef, file, { contentType: file.type || "image/*" });
           const url = await getDownloadURL(storageRef);
           return { url, path, name: file.name };
         })
@@ -126,7 +89,7 @@ export default function MarketplaceNew() {
       setErr(e.message || "Image upload failed.");
     } finally {
       setUploading(false);
-      // reset the input so the same file can be selected again if needed
+      // allow re-selecting same files
       e.target.value = "";
     }
   };
@@ -145,32 +108,19 @@ export default function MarketplaceNew() {
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    setErr("");
-    setMsg("");
+    setErr(""); setMsg("");
 
-    if (!auth.currentUser.emailVerified) {
-      setErr("Verify your email before posting.");
-      return;
-    }
-    if (uploading) {
-      setErr("Please wait for images to finish uploading.");
-      return;
-    }
-    if (uploaded.length === 0) {
-      setErr("Please upload at least one image.");
-      return;
-    }
+    if (!auth.currentUser.emailVerified) { setErr("Verify your email before posting."); return; }
+    if (uploading) { setErr("Please wait for images to finish uploading."); return; }
+    if (uploaded.length === 0) { setErr("Please upload at least one image."); return; }
 
     setLoading(true);
     try {
-      const images = uploaded.map((u) => ({
-        originalURL: u.url,
-        optimizedURL: u.url,
-      }));
+      // Use same URL for optimized if you don’t have an optimizer yet
+      const images = uploaded.map((u) => ({ originalURL: u.url, optimizedURL: u.url }));
 
       const payload = {
         ownerId: user.uid,
-        ownerSlug: undefined, // optional: set if you derive it here
         ownerName: auth.currentUser?.displayName || auth.currentUser?.email || "Seller",
         ownerPhotoURL: auth.currentUser?.photoURL || "",
         title: form.title.trim(),
@@ -194,12 +144,12 @@ export default function MarketplaceNew() {
   };
 
   return (
-    <Container>
-      <div className="space-y-8 mt-16">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <PageHeading title="New Marketplace Listing" />
-        </div>
+    <Container className="my-16">
+      <div className="space-y-8">
+        <PageHeading
+          title="New Marketplace Listing"
+          description="Create a listing with photos, price, location, and category so buyers can find it faster. You must verify your email before posting."
+        />
 
         {/* Email verification alert */}
         {!auth.currentUser.emailVerified && (
@@ -273,9 +223,7 @@ export default function MarketplaceNew() {
 
             {/* Category (country-style select) */}
             <div className="sm:col-span-3">
-              <label htmlFor="category" className="block text-sm/6 font-medium text-gray-900">
-                Category
-              </label>
+              <label htmlFor="category" className="block text-sm/6 font-medium text-gray-900">Category</label>
               <div className="mt-2 grid grid-cols-1">
                 <select
                   id="category"
@@ -284,16 +232,9 @@ export default function MarketplaceNew() {
                   onChange={onChange}
                   className="col-start-1 row-start-1 w-full appearance-none rounded-md bg-white py-1.5 pr-8 pl-3 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6"
                 >
-                  {CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
+                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <ChevronDownIcon
-                  aria-hidden="true"
-                  className="pointer-events-none col-start-1 row-start-1 mr-2 size-5 self-center justify-self-end text-gray-500 sm:size-4"
-                />
+                <ChevronDownIcon aria-hidden="true" className="pointer-events-none col-start-1 row-start-1 mr-2 size-5 self-center justify-self-end text-gray-500 sm:size-4" />
               </div>
             </div>
 
@@ -311,11 +252,9 @@ export default function MarketplaceNew() {
               </div>
             </div>
 
-            {/* Images (cover photo-style with auto-upload) */}
+            {/* Images (cover photo-style with auto-upload to Storage rules path) */}
             <div className="col-span-full">
-              <label htmlFor="file-upload" className="block text-sm/6 font-medium text-gray-900">
-                Images
-              </label>
+              <label htmlFor="file-upload" className="block text-sm/6 font-medium text-gray-900">Images</label>
               <div className="mt-2 flex justify-center rounded-lg border border-dashed border-gray-900/25 px-6 py-10">
                 <div className="text-center">
                   <PhotoIcon aria-hidden="true" className="mx-auto size-12 text-gray-300" />
@@ -346,12 +285,8 @@ export default function MarketplaceNew() {
               {uploaded.length > 0 && (
                 <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {uploaded.map((img, idx) => (
-                    <div key={img.path} className="relative overflow-hidden rounded-2xl border">
-                      <img
-                        src={img.url}
-                        alt={img.name || `Image ${idx + 1}`}
-                        className="h-40 w-full object-cover"
-                      />
+                    <div key={img.path} className="relative overflow-hidden rounded-md border border-gray-300">
+                      <img src={img.url} alt={img.name || `Image ${idx + 1}`} className="h-40 w-full object-cover" />
                       <button
                         type="button"
                         onClick={() => removeImage(idx)}
@@ -373,12 +308,8 @@ export default function MarketplaceNew() {
               {msg && <p className="text-sm text-green-700 mb-2">{msg}</p>}
 
               <div className="flex gap-2">
-                <Button type="submit" loading={loading} disabled={uploading} loadingText="Publishing…">
-                  Publish
-                </Button>
-                <Button type="button" variant="outline" onClick={() => history.back()} disabled={loading || uploading}>
-                  Cancel
-                </Button>
+                <Button type="submit" loading={loading} disabled={uploading} loadingText="Publishing…">Publish</Button>
+                <Button type="button" variant="outline" onClick={() => history.back()} disabled={loading || uploading}>Cancel</Button>
               </div>
             </div>
           </form>

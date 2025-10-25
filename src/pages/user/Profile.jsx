@@ -205,14 +205,18 @@ export default function Profile() {
   const [viewMonth, setViewMonth] = useState(baseDob.getMonth());
 
   const days = useMemo(() => getMonthGrid(viewYear, viewMonth, pvt.dateOfBirth), [viewYear, viewMonth, pvt.dateOfBirth]);
-  const monthLabel = useMemo(() =>
-    new Date(viewYear, viewMonth, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" }),
-    [viewYear, viewMonth]);
+  const monthLabel = useMemo(
+    () => new Date(viewYear, viewMonth, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    [viewYear, viewMonth]
+  );
 
-  /* NEW: lock flag after 3 name updates */
+  /* Lock flag after 3 name updates */
   const nameLocked = nameChangeCount >= 3;
 
-  /* ───────────── NEW: Month nav handlers ───────────── */
+  /* Derived "changes left" */
+  const changesLeft = useMemo(() => Math.max(0, 3 - (nameChangeCount || 0)), [nameChangeCount]);
+
+  /* Month nav handlers */
   const goPrevMonth = () => {
     setViewMonth((m) => {
       if (m === 0) {
@@ -233,7 +237,7 @@ export default function Profile() {
     });
   };
 
-  /* ───────────── NEW: Close calendar on outside click ───────────── */
+  /* Close calendar on outside click */
   useEffect(() => {
     if (!isCalOpen) return;
     const onClick = (e) => {
@@ -258,7 +262,7 @@ export default function Profile() {
           getDoc(doc(db, "profiles", user.uid)),
         ]);
         const p = pvtSnap.exists() ? pvtSnap.data() : {};
-        const q = pubSnap.exists() ? pubSnap.data() : {};
+        const q = pubSnap.exists() ? pubSnap.data() : {}; // fixed bug
 
         if (!mounted) return;
 
@@ -305,8 +309,8 @@ export default function Profile() {
 
   /* LIVE Area via onSnapshot */
   useEffect(() => {
-    const ref = doc(db, "users", user.uid);
-    const unsub = onSnapshot(ref, (snap) => {
+    const refUser = doc(db, "users", user.uid);
+    const unsub = onSnapshot(refUser, (snap) => {
       if (!snap.exists()) return;
       const data = snap.data();
       const newArea = computeAreaFromRecent(data.recentLocations || []);
@@ -399,12 +403,13 @@ export default function Profile() {
     if (d && d.length !== 10) { if (!isAuto) setErr("Enter a valid 10-digit Indian mobile number."); return; }
 
     const prev = lastSavedPrivRef.current || {};
-    const isNameChanged = (pvt.firstName.trim() !== (prev.firstName || "").trim()) ||
-                          (pvt.lastName.trim() !== (prev.lastName || "").trim());
+    const isNameChanged =
+      pvt.firstName.trim() !== (prev.firstName || "").trim() ||
+      pvt.lastName.trim() !== (prev.lastName || "").trim();
 
     // Enforce max 3 name edits
     if (isNameChanged && nameChangeCount >= 3) {
-      if (!isAuto) setErr("Name change limit reached (3). You cannot change first/last name anymore.");
+      if (!isAuto) setErr("Name change limit reached (0 of 3 left). You cannot change first/last name anymore.");
       // revert UI to last saved names
       setPvt((cur) => ({ ...cur, firstName: prev.firstName || "", lastName: prev.lastName || "" }));
       return;
@@ -502,13 +507,13 @@ export default function Profile() {
   const propagateNewSlugToItems = async (newSlug) => {
     let cursor = null;
     while (true) {
-      const q = query(
+      const qItems = query(
         collection(db, "items"),
         where("ownerId", "==", user.uid),
         fsLimit(400),
         ...(cursor ? [startAfter(cursor)] : [])
       );
-      const snap = await getDocs(q);
+      const snap = await getDocs(qItems);
       if (snap.empty) break;
       const batch = writeBatch(db);
       snap.docs.forEach((d) => batch.update(doc(db, "items", d.id), { ownerSlug: newSlug }));
@@ -599,13 +604,13 @@ export default function Profile() {
     (async () => {
       try {
         setLoadingItems(true);
-        const q = query(
+        const qItems = query(
           collection(db, "items"),
           where("ownerId", "==", user.uid),
           orderBy("createdAt", "desc"),
           fsLimit(PAGE_SIZE)
         );
-        const snap = await getDocs(q);
+        const snap = await getDocs(qItems);
         if (cancelled) return;
         setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         lastDocRef.current = snap.docs[snap.docs.length - 1] || null;
@@ -620,14 +625,14 @@ export default function Profile() {
     if (endReached || loadingMore || !lastDocRef.current) return;
     setLoadingMore(true);
     try {
-      const q = query(
+      const qItems = query(
         collection(db, "items"),
         where("ownerId", "==", user.uid),
         orderBy("createdAt", "desc"),
         fsLimit(PAGE_SIZE),
         startAfter(lastDocRef.current)
       );
-      const snap = await getDocs(q);
+      const snap = await getDocs(qItems);
       setItems((prev) => [...prev, ...snap.docs.map((d) => ({ id: d.id, ...d.data() }))]);
       lastDocRef.current = snap.docs[snap.docs.length - 1] || null;
       if (snap.size < PAGE_SIZE) setEndReached(true);
@@ -635,10 +640,9 @@ export default function Profile() {
     finally { setLoadingMore(false); }
   };
 
-  /* Skeleton UI omitted for brevity in this reply (same as before) */
+  /* Skeleton */
   const Skeleton = () => (
     <div className="space-y-8 animate-pulse">
-      {/* ...same skeleton as before... */}
       <div className="h-6 w-28 bg-gray-200 rounded" />
     </div>
   );
@@ -647,256 +651,283 @@ export default function Profile() {
 
   return (
     <>
-    <Container>
-      <div className="space-y-8 mt-16">
-        <div className="flex items-center justify-between">
-        <PageHeading title="Profile" />
-        <div className="text-xs text-gray-600">
-            Name changes used: {nameChangeCount}/3
-          </div>
-        </div>
-        {!auth.currentUser.emailVerified && (
-          <div className="rounded-lg border bg-amber-50 p-3 text-sm">
-            Your email is not verified. Some actions (like posting) are blocked.
-            <div className="mt-2">
-              <Button size="sm" onClick={() => sendEmailVerification(auth.currentUser)}>
-                Resend verification email
-              </Button>
-            </div>
-          </div>
-        )}
+      <Container className="my-16">
+        <div className="space-y-8">
+          {/* Header */}
+          <PageHeading
+              title="Profile"
+              description="Manage your personal info, avatar, and public username. You can change your name up to 3 times."
+            />
 
-        {/* PERSONAL INFORMATION */}
-        <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
-          <div>
-            <h2 className="text-base/7 font-semibold text-gray-900">Personal Information</h2>
-            <p className="mt-1 text-sm/6 text-gray-600">
-              Area updates from your recent locations. You can change your name up to 3 times.
-            </p>
-          </div>
-
-          <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6 md:col-span-2">
-            {/* Photo */}
-            <div className="col-span-full">
-              <label className="block text-sm/6 font-medium text-gray-900">Photo</label>
-              <div className="mt-2 flex items-center gap-x-3">
-                {pub.avatar ? (
-                  <img src={pub.avatar} alt="Avatar" className="size-12 rounded-full object-cover" />
-                ) : (
-                  <UserCircleIcon aria-hidden="true" className="size-12 text-gray-300" />
-                )}
-                <button type="button" onClick={() => !busyAvatar && fileInputRef.current?.click()}
-                  disabled={busyAvatar}
-                  className={`rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 ${busyAvatar ? "opacity-60 cursor-not-allowed" : ""}`}>
-                  {busyAvatar ? "Uploading..." : "Change"}
-                </button>
-                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
+          {!auth.currentUser.emailVerified && (
+            <div className="rounded-lg border bg-amber-50 p-3 text-sm">
+              Your email is not verified. Some actions (like posting) are blocked.
+              <div className="mt-2">
+                <Button size="sm" onClick={() => sendEmailVerification(auth.currentUser)}>
+                  Resend verification email
+                </Button>
               </div>
             </div>
+          )}
 
-            {/* First / Last (now read-only when nameLocked) */}
-            <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">First name</label>
-              <div className="mt-2">
-                <input
-                  type="text"
-                  value={pvt.firstName}
-                  onChange={(e)=>setPvt({...pvt, firstName: e.target.value})}
-                  readOnly={nameLocked}
-                  title={nameLocked ? "Name change limit reached" : undefined}
-                  className={`block w-full rounded-md px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 sm:text-sm/6
-                    ${nameLocked ? "bg-gray-50 outline-gray-200 cursor-not-allowed" : "bg-white outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600"}`}
-                />
-                {nameLocked && (
-                  <p className="mt-1 text-xs text-gray-500">You’ve reached the 3 changes limit. First name is locked.</p>
-                )}
-              </div>
-            </div>
-            <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">Last name</label>
-              <div className="mt-2">
-                <input
-                  type="text"
-                  value={pvt.lastName}
-                  onChange={(e)=>setPvt({...pvt, lastName: e.target.value})}
-                  readOnly={nameLocked}
-                  title={nameLocked ? "Name change limit reached" : undefined}
-                  className={`block w-full rounded-md px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 sm:text-sm/6
-                    ${nameLocked ? "bg-gray-50 outline-gray-200 cursor-not-allowed" : "bg-white outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600"}`}
-                />
-                {nameLocked && (
-                  <p className="mt-1 text-xs text-gray-500">You’ve reached the 3 changes limit. Last name is locked.</p>
-                )}
-              </div>
+          {/* PERSONAL INFORMATION */}
+          <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
+            <div>
+              <h2 className="text-base/7 font-semibold text-gray-900">Personal Information</h2>
+              <p className="mt-1 text-sm/6 text-gray-600">
+                Area updates from your recent locations. You can change your name up to 3 times.
+              </p>
             </div>
 
-            {/* Email (read-only) */}
-            <div className="sm:col-span-4">
-              <label className="block text-sm/6 font-medium text-gray-900">Email address</label>
-              <div className="mt-2">
-                <input type="email" value={user.email || ""} readOnly
-                  className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 sm:text-sm/6"/>
+            <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6 md:col-span-2">
+              {/* Photo */}
+              <div className="col-span-full">
+                <label className="block text-sm/6 font-medium text-gray-900">Photo</label>
+                <div className="mt-2 flex items-center gap-x-3">
+                  {pub.avatar ? (
+                    <img src={pub.avatar} alt="Avatar" className="size-12 rounded-full object-cover" />
+                  ) : (
+                    <UserCircleIcon aria-hidden="true" className="size-12 text-gray-300" />
+                  )}
+                  <button type="button" onClick={() => !busyAvatar && fileInputRef.current?.click()}
+                    disabled={busyAvatar}
+                    className={`rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 ${busyAvatar ? "opacity-60 cursor-not-allowed" : ""}`}>
+                    {busyAvatar ? "Uploading..." : "Change"}
+                  </button>
+                  <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
+                </div>
               </div>
-            </div>
 
-            {/* DOB */}
-            <div className="sm:col-span-3 relative">
-              <label className="block text-sm/6 font-medium text-gray-900">Date of birth</label>
-              <div className="mt-2">
-                <button type="button" onClick={() => setIsCalOpen((o)=>!o)} ref={anchorRef}
-                  className="flex w-full items-center justify-between rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-base text-gray-900 outline-none focus:ring-2 focus:ring-indigo-600"
-                  aria-haspopup="dialog" aria-expanded={isCalOpen}>
-                  <span className={pvt.dateOfBirth ? "" : "text-gray-500"}>
-                    {pvt.dateOfBirth
-                      ? parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })
-                      : "Select date"}
+              {/* Name changes counter (near the fields it affects) */}
+              <div className="col-span-full" aria-live="polite">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1
+                      ${changesLeft === 0
+                        ? "bg-red-50 text-red-700 ring-red-200"
+                        : changesLeft === 1
+                        ? "bg-amber-50 text-amber-700 ring-amber-200"
+                        : "bg-gray-100 text-gray-700 ring-gray-200"}`}
+                  >
+                    {changesLeft === 0
+                      ? "Name change limit reached (0 of 3 left)"
+                      : changesLeft === 1
+                      ? "Last change left (1 of 3)"
+                      : `Name changes left: ${changesLeft} of 3`}
                   </span>
-                  <CalendarDaysIcon className="size-5 text-gray-400" aria-hidden="true" />
-                </button>
+
+                  <button
+                    type="button"
+                    className="text-xs text-gray-500 hover:underline"
+                    onClick={() => alert("To prevent impersonation and maintain trust, we limit name changes to 3.")}
+                  >
+                    Why is there a limit?
+                  </button>
+                </div>
               </div>
 
-              {isCalOpen && (
-                <div ref={calRef} role="dialog" aria-label="Choose date of birth"
-                  className="absolute left-0 right-0 z-20 mt-2 w-full overflow-hidden rounded-2xl border bg-white shadow-xl">
-                  <div className="p-4">
-                    <div className="flex items-center">
-                      <h3 className="flex-auto text-sm font-semibold text-gray-900">{monthLabel}</h3>
-                      <button type="button" onClick={goPrevMonth} className="-my-1.5 p-1.5 text-gray-400 hover:text-gray-500">
-                        <span className="sr-only">Previous month</span><ChevronLeftIcon className="size-5" />
-                      </button>
-                      <button type="button" onClick={goNextMonth} className="-my-1.5 -mr-1.5 ml-2 p-1.5 text-gray-400 hover:text-gray-500">
-                        <span className="sr-only">Next month</span><ChevronRightIcon className="size-5" />
-                      </button>
-                      <button type="button" onClick={()=>setIsCalOpen(false)} className="-my-1.5 ml-2 p-1.5 text-gray-400 hover:text-gray-500">
-                        <span className="sr-only">Close</span><XMarkIcon className="size-5" />
-                      </button>
-                    </div>
+              {/* First / Last (read-only when nameLocked) */}
+              <div className="sm:col-span-3">
+                <label className="block text-sm/6 font-medium text-gray-900">First name</label>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    value={pvt.firstName}
+                    onChange={(e)=>setPvt({...pvt, firstName: e.target.value})}
+                    readOnly={nameLocked}
+                    title={nameLocked ? "Name change limit reached" : undefined}
+                    className={`block w-full rounded-md px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 sm:text-sm/6
+                      ${nameLocked ? "bg-gray-50 outline-gray-200 cursor-not-allowed" : "bg-white outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600"}`}
+                  />
+                  {nameLocked && (
+                    <p className="mt-1 text-xs text-gray-500">You’ve reached the limit. First name is locked.</p>
+                  )}
+                </div>
+              </div>
+              <div className="sm:col-span-3">
+                <label className="block text-sm/6 font-medium text-gray-900">Last name</label>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    value={pvt.lastName}
+                    onChange={(e)=>setPvt({...pvt, lastName: e.target.value})}
+                    readOnly={nameLocked}
+                    title={nameLocked ? "Name change limit reached" : undefined}
+                    className={`block w-full rounded-md px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 sm:text-sm/6
+                      ${nameLocked ? "bg-gray-50 outline-gray-200 cursor-not-allowed" : "bg-white outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600"}`}
+                  />
+                  {nameLocked && (
+                    <p className="mt-1 text-xs text-gray-500">You’ve reached the limit. Last name is locked.</p>
+                  )}
+                </div>
+              </div>
 
-                    <div className="mt-6 grid grid-cols-7 text-center text-xs/6 text-gray-500">
-                      <div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div><div>S</div>
-                    </div>
-                    <div className="mt-2 grid grid-cols-7 text-sm">
-                      {days.map((day) => (
-                        <div key={day.date} className="py-2 not-first:border-t not-first:border-gray-200">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // keep calendar view in sync with chosen date
-                              setPvt((prev)=>({ ...prev, dateOfBirth: day.date }));
-                              const d = parseYmdLocal(day.date);
-                              setViewYear(d.getFullYear());
-                              setViewMonth(d.getMonth());
-                              setIsCalOpen(false);
-                            }}
-                            className="mx-auto flex size-8 items-center justify-center rounded-full hover:bg-gray-200"
-                          >
-                            <time dateTime={day.date}>{day.date.split("-").pop().replace(/^0/,"")}</time>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 flex items-center justify-between border-t pt-3 text-xs text-gray-600">
-                      <span>
-                        {pvt.dateOfBirth
-                          ? `Selected: ${parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
-                          : "No date selected"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const ymd = fmtYmd(new Date());
-                          setPvt((prev)=>({ ...prev, dateOfBirth: ymd }));
-                          const d = new Date();
-                          setViewYear(d.getFullYear());
-                          setViewMonth(d.getMonth());
-                        }}
-                        className="rounded px-2 py-1 hover:bg-gray-100"
-                      >
-                        Today
-                      </button>
+              {/* Email (read-only) */}
+              <div className="sm:col-span-4">
+                <label className="block text-sm/6 font-medium text-gray-900">Email address</label>
+                <div className="mt-2">
+                  <input type="email" value={user.email || ""} readOnly
+                    className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 sm:text-sm/6"/>
+                </div>
+              </div>
+
+              {/* DOB */}
+              <div className="sm:col-span-3 relative">
+                <label className="block text-sm/6 font-medium text-gray-900">Date of birth</label>
+                <div className="mt-2">
+                  <button type="button" onClick={() => setIsCalOpen((o)=>!o)} ref={anchorRef}
+                    className="flex w-full items-center justify-between rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-base text-gray-900 outline-none focus:ring-2 focus:ring-indigo-600"
+                    aria-haspopup="dialog" aria-expanded={isCalOpen}>
+                    <span className={pvt.dateOfBirth ? "" : "text-gray-500"}>
+                      {pvt.dateOfBirth
+                        ? parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })
+                        : "Select date"}
+                    </span>
+                    <CalendarDaysIcon className="size-5 text-gray-400" aria-hidden="true" />
+                  </button>
+                </div>
+
+                {isCalOpen && (
+                  <div ref={calRef} role="dialog" aria-label="Choose date of birth"
+                    className="absolute left-0 right-0 z-20 mt-2 w-full overflow-hidden rounded-2xl border bg-white shadow-xl">
+                    <div className="p-4">
+                      <div className="flex items-center">
+                        <h3 className="flex-auto text-sm font-semibold text-gray-900">{monthLabel}</h3>
+                        <button type="button" onClick={goPrevMonth} className="-my-1.5 p-1.5 text-gray-400 hover:text-gray-500">
+                          <span className="sr-only">Previous month</span><ChevronLeftIcon className="size-5" />
+                        </button>
+                        <button type="button" onClick={goNextMonth} className="-my-1.5 -mr-1.5 ml-2 p-1.5 text-gray-400 hover:text-gray-500">
+                          <span className="sr-only">Next month</span><ChevronRightIcon className="size-5" />
+                        </button>
+                        <button type="button" onClick={()=>setIsCalOpen(false)} className="-my-1.5 ml-2 p-1.5 text-gray-400 hover:text-gray-500">
+                          <span className="sr-only">Close</span><XMarkIcon className="size-5" />
+                        </button>
+                      </div>
+
+                      <div className="mt-6 grid grid-cols-7 text-center text-xs/6 text-gray-500">
+                        <div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div><div>S</div>
+                      </div>
+                      <div className="mt-2 grid grid-cols-7 text-sm">
+                        {days.map((day) => (
+                          <div key={day.date} className="py-2 not-first:border-t not-first:border-gray-200">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPvt((prev)=>({ ...prev, dateOfBirth: day.date }));
+                                const d = parseYmdLocal(day.date);
+                                setViewYear(d.getFullYear());
+                                setViewMonth(d.getMonth());
+                                setIsCalOpen(false);
+                              }}
+                              className="mx-auto flex size-8 items-center justify-center rounded-full hover:bg-gray-200"
+                            >
+                              <time dateTime={day.date}>{day.date.split("-").pop().replace(/^0/,"")}</time>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 flex items-center justify-between border-t pt-3 text-xs text-gray-600">
+                        <span>
+                          {pvt.dateOfBirth
+                            ? `Selected: ${parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
+                            : "No date selected"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const ymd = fmtYmd(new Date());
+                            setPvt((prev)=>({ ...prev, dateOfBirth: ymd }));
+                            const d = new Date();
+                            setViewYear(d.getFullYear());
+                            setViewMonth(d.getMonth());
+                          }}
+                          className="rounded px-2 py-1 hover:bg-gray-100"
+                        >
+                          Today
+                        </button>
+                      </div>
                     </div>
                   </div>
+                )}
+              </div>
+
+              {/* Area (auto) */}
+              <div className="sm:col-span-3">
+                <label className="block text-sm/6 font-medium text-gray-900">Area (auto)</label>
+                <div className="mt-2">
+                  <input type="text" value={area || "—"} readOnly
+                    className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6" />
+                  <p className="mt-1 text-xs text-gray-500">Based on your recent locations (majority region).</p>
                 </div>
-              )}
-            </div>
-
-            {/* Area (auto) */}
-            <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">Area (auto)</label>
-              <div className="mt-2">
-                <input type="text" value={area || "—"} readOnly
-                  className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6" />
-                <p className="mt-1 text-xs text-gray-500">Based on your recent locations (majority region).</p>
               </div>
-            </div>
 
-            {/* Phone (India-only) */}
-            <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">Phone</label>
-              <div className="mt-2">
-                <input type="tel" placeholder="+91 98765 43210"
-                  value={phoneFormatted}
-                  onChange={(e)=> setPvt((prev)=>({ ...prev, phone: e.target.value }))}
-                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6" />
+              {/* Phone (India-only) */}
+              <div className="sm:col-span-3">
+                <label className="block text-sm/6 font-medium text-gray-900">Phone</label>
+                <div className="mt-2">
+                  <input type="tel" placeholder="+91 98765 43210"
+                    value={phoneFormatted}
+                    onChange={(e)=> setPvt((prev)=>({ ...prev, phone: e.target.value }))}
+                    className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6" />
+                </div>
               </div>
-            </div>
 
-            {/* Save private */}
-            <div className="col-span-full">
-              <Button onClick={()=>savePrivate(false)} loading={savingPriv}>
-                Save private details
-              </Button>
+              {/* Save private */}
+              <div className="col-span-full">
+                <Button onClick={()=>savePrivate(false)} loading={savingPriv}>
+                  Save private details
+                </Button>
+              </div>
             </div>
           </div>
+
+          {/* PUBLIC PROFILE */}
+          <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
+            <div>
+              <h2 className="text-base/7 font-semibold text-gray-900">Public profile</h2>
+              <p className="mt-1 text-sm/6 text-gray-600">
+                Username must start with your name.
+              </p>
+            </div>
+
+            <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-6 md:col-span-2">
+              <div className="sm:col-span-3">
+                <label className="block text-sm/6 font-medium text-gray-900">Display name</label>
+                <div className="mt-2">
+                  <input type="text" value={pub.displayName} readOnly
+                    className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6" />
+                  <p className="mt-1 text-xs text-neutral-500">Comes from your first &amp; last name.</p>
+                </div>
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-sm/6 font-medium text-gray-900">Username (slug)</label>
+                <div className="mt-2">
+                  <input type="text" value={pub.sellerSlug}
+                    onChange={(e)=>setPub({...pub, sellerSlug: e.target.value.toLowerCase()})}
+                    placeholder="e.g. akash-ramasani-2705"
+                    className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6" />
+                  <p className="text-xs text-neutral-500 mt-1">
+                    Public URL: <code>/s/{slugify(pub.sellerSlug) || "your-name"}</code>
+                  </p>
+                </div>
+              </div>
+
+              <div className="col-span-full">
+                <Button onClick={savePublic} loading={savingPub}>
+                  Save public profile
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* MARKETPLACE LISTINGS (unchanged) */}
+          {/* ... keep your listings section here ... */}
+
+          {err && <p className="text-sm text-rose-600">{err}</p>}
+          {msg && <p className="text-sm text-green-700">{msg}</p>}
         </div>
-
-        {/* PUBLIC PROFILE */}
-        <div className="grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3">
-          <div>
-            <h2 className="text-base/7 font-semibold text-gray-900">Public profile</h2>
-            <p className="mt-1 text-sm/6 text-gray-600">
-              Username must start with your name.
-            </p>
-          </div>
-
-          <div className="grid max-w-2xl grid-cols-1 gap-x-6 gap-y-6 sm:grid-cols-6 md:col-span-2">
-            <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">Display name</label>
-              <div className="mt-2">
-                <input type="text" value={pub.displayName} readOnly
-                  className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6" />
-                <p className="mt-1 text-xs text-neutral-500">Comes from your first &amp; last name.</p>
-              </div>
-            </div>
-
-            <div className="sm:col-span-3">
-              <label className="block text-sm/6 font-medium text-gray-900">Username (slug)</label>
-              <div className="mt-2">
-                <input type="text" value={pub.sellerSlug}
-                  onChange={(e)=>setPub({...pub, sellerSlug: e.target.value.toLowerCase()})}
-                  placeholder="e.g. akash-ramasani-2705"
-                  className="block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 sm:text-sm/6" />
-                <p className="text-xs text-neutral-500 mt-1">
-                  Public URL: <code>/s/{slugify(pub.sellerSlug) || "your-name"}</code>
-                </p>
-              </div>
-            </div>
-
-            <div className="col-span-full">
-              <Button onClick={savePublic} loading={savingPub}>
-                Save public profile
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* MARKETPLACE LISTINGS (unchanged) */}
-        {/* ... keep your listings section here ... */}
-
-        {err && <p className="text-sm text-rose-600">{err}</p>}
-        {msg && <p className="text-sm text-green-700">{msg}</p>}
-      </div>
-    </Container>
+      </Container>
     </>
   );
 }

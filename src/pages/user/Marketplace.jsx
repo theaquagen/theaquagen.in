@@ -22,6 +22,8 @@ import {
 } from '@headlessui/react';
 import { ChevronDownIcon, FunnelIcon } from '@heroicons/react/20/solid';
 
+import PageHeading from "../../components/ui/PageHeading";
+
 const PAGE_SIZE = 12;
 const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"]; // omit "All" because this UI is multi-select
 
@@ -183,14 +185,12 @@ export default function Marketplace() {
 
   // ---- Render ----
   return (
-    <Container>
-      <div className="bg-white">
-        <div className="px-4 py-16 text-center sm:px-6 lg:px-8">
-          <h1 className="text-4xl font-bold tracking-tight text-gray-900">Marketplace</h1>
-          <p className="mx-auto mt-4 max-w-xl text-base text-gray-500">
-            Browse items from your community. Use filters or sort to find your next great deal.
-          </p>
-        </div>
+    <Container className="my-16">
+      <div className="space-y-8">
+        <PageHeading
+            title="Marketplace"
+            description="Browse items from your community. Use filters or sort to find your next great deal."
+          />
 
         {/* Filters (Disclosure bar + panel) */}
         <Disclosure
