@@ -18,6 +18,20 @@ const STALE_DEVICE_READING_MS = 30 * 60 * 1000
 const DISTANCE_THRESHOLD_KM = 15
 const REFRESH_COOLDOWN_MS = 1200
 
+// Clears all location-related caches (call this on logout)
+const clearLocationCaches = () => {
+  try {
+    sessionStorage.removeItem(LOC_SESSION_KEY)
+    sessionStorage.removeItem(LOC_ANIM_KEY)
+    sessionStorage.removeItem(GEO_CACHE_KEY)
+    // Also remove any per-user namespaced variants
+    const keys = Object.keys(sessionStorage)
+    for (const k of keys) {
+      if (k.startsWith(`${LOC_SESSION_KEY}:`)) sessionStorage.removeItem(k)
+    }
+  } catch {}
+}
+
 function prefersReducedMotion() {
   return typeof window !== 'undefined' &&
     window.matchMedia &&
@@ -111,9 +125,19 @@ function useCurrentLocation() {
   const [state, setState] = useState({ status: 'idle', label: null, lastUpdated: null, refreshing: false, lat: null, lon: null })
   const lastAutoCheck = useRef(0)
   const cooldownUntil = useRef(0)
+  const prevUid = useRef(null)
 
-  const cacheSet = (payload) => sessionStorage.setItem(LOC_SESSION_KEY, JSON.stringify({ ...payload, fetchedAt: Date.now() }))
-  const cacheGet = () => { try { return JSON.parse(sessionStorage.getItem(LOC_SESSION_KEY) || 'null') } catch { return null } }
+  // Per-user namespaced cache key to prevent cross-user bleed
+  const cacheKey = user?.uid ? `${LOC_SESSION_KEY}:${user.uid}` : `${LOC_SESSION_KEY}:anon`
+
+  const cacheSet = (payload) => {
+    try {
+      sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, fetchedAt: Date.now() }))
+    } catch {}
+  }
+  const cacheGet = () => {
+    try { return JSON.parse(sessionStorage.getItem(cacheKey) || 'null') } catch { return null }
+  }
   const geoCacheGet = (key) => { try { const map = JSON.parse(sessionStorage.getItem(GEO_CACHE_KEY) || '{}'); return map[key] || null } catch { return null } }
   const geoCacheSet = (key, obj) => { try { const map = JSON.parse(sessionStorage.getItem(GEO_CACHE_KEY) || '{}'); map[key] = obj; sessionStorage.setItem(GEO_CACHE_KEY, JSON.stringify(map)) } catch {} }
 
@@ -145,21 +169,25 @@ function useCurrentLocation() {
       setState({ status: 'ok', label, refreshing: false, lastUpdated: Date.now(), lat, lon })
       if (user) await saveLocationIfChanged(user.uid, { lat, lon, city, region, country, label })
     } catch {
-      cacheSet({ status: 'error' })
+      // Don't cache error/denied; allow new sessions to retry
       setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() }))
     }
   }
 
   const detectOnce = () => {
     if (!('geolocation' in navigator)) {
-      cacheSet({ status: 'error' })
+      // Don't cache error; keep session fresh for next user
       setState({ status: 'error', label: null, refreshing: false, lastUpdated: Date.now(), lat: null, lon: null })
       return
     }
     setState({ status: 'loading', label: null, refreshing: false, lastUpdated: null, lat: null, lon: null })
     navigator.geolocation.getCurrentPosition(
       (pos) => { const { latitude, longitude } = pos.coords; reverseGeocodeAndSet(latitude, longitude, { setAnimShown: true }) },
-      (err) => { const status = err.code === err.PERMISSION_DENIED ? 'denied' : 'error'; cacheSet({ status }); setState(s => ({ ...s, status, refreshing: false, lastUpdated: Date.now() })) },
+      (err) => {
+        const status = err.code === err.PERMISSION_DENIED ? 'denied' : 'error'
+        // Don't cache denied/error so a new session/user can be prompted again
+        setState(s => ({ ...s, status, refreshing: false, lastUpdated: Date.now() }))
+      },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 60_000 }
     )
   }
@@ -168,17 +196,37 @@ function useCurrentLocation() {
     const now = Date.now()
     if (now < cooldownUntil.current) return
     if (!('geolocation' in navigator)) {
-      cacheSet({ status: 'error' })
       setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() }))
       return
     }
     setState(s => ({ ...s, refreshing: true }))
     navigator.geolocation.getCurrentPosition(
-      (pos) => { const { latitude, longitude } = pos.coords; reverseGeocodeAndSet(latitude, longitude); cooldownUntil.current = Date.now() + 1200 },
-      () => { cacheSet({ status: 'error' }); setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() })) },
+      (pos) => {
+        const { latitude, longitude } = pos.coords
+        reverseGeocodeAndSet(latitude, longitude)
+        cooldownUntil.current = Date.now() + REFRESH_COOLDOWN_MS
+      },
+      () => {
+        // Don't cache error
+        setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() }))
+      },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 0 }
     )
   }
+
+  // Reset when the logged-in user changes (prevents cross-user bleed)
+  useEffect(() => {
+    if (prevUid.current !== (user?.uid ?? null)) {
+      prevUid.current = user?.uid ?? null
+      try {
+        // Clear per-user cache for the new user context
+        const key = user?.uid ? `${LOC_SESSION_KEY}:${user.uid}` : `${LOC_SESSION_KEY}:anon`
+        sessionStorage.removeItem(key)
+        sessionStorage.removeItem(LOC_ANIM_KEY)
+      } catch {}
+      setState({ status: 'idle', label: null, lastUpdated: null, refreshing: false, lat: null, lon: null })
+    }
+  }, [user?.uid])
 
   useEffect(() => {
     const cached = cacheGet()
@@ -186,12 +234,10 @@ function useCurrentLocation() {
       setState({ status: 'ok', label: cached.label, refreshing: false, lastUpdated: cached.fetchedAt, lat: cached.lat ?? null, lon: cached.lon ?? null })
       return
     }
-    if (cached?.status === 'denied' || cached?.status === 'error') {
-      setState({ status: cached.status, label: null, refreshing: false, lastUpdated: cached.fetchedAt ?? Date.now(), lat: null, lon: null })
-      return
-    }
+    // For anything else (no cache or prior denied/error not cached), detect now
     detectOnce()
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid]) // rerun when user changes to establish fresh state
 
   return { ...state, refresh }
 }
@@ -341,7 +387,11 @@ export function Navbar() {
   const isAdminRoute = pathname.startsWith('/admin')
 
   const handleLogout = async () => {
-    try { await logout(); navigate(isAdminRoute ? '/admin/login' : '/login') } catch {}
+    try {
+      clearLocationCaches() // <-- wipe location-related caches on logout
+      await logout()
+      navigate(isAdminRoute ? '/admin/login' : '/login')
+    } catch {}
   }
 
   const userLinks = useMemo(() => {

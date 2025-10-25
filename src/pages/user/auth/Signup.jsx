@@ -11,10 +11,8 @@ import { useNavigate, Link } from "react-router-dom";
 import { Field, Input, Label } from "@headlessui/react";
 import clsx from "clsx";
 import { GradientBackground } from "../../../components/ui/Gradient";
+import { useToast } from "../../../components/Toast/ToastProvider"; // 👈 add toast hook
 
-/* ──────────────────────────────────────────────────────────────
-   Helpers (shared with Profile.jsx semantics)
-   ────────────────────────────────────────────────────────────── */
 function slugify(raw) {
   return String(raw || "")
     .toLowerCase()
@@ -127,6 +125,7 @@ export default function Signup() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const nav = useNavigate();
+  const { showToast } = useToast(); // 👈 toast
 
   const onChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
 
@@ -181,12 +180,19 @@ export default function Signup() {
     setErr("");
     setLoading(true);
 
+    // prevent auth redirect race
     sessionStorage.setItem("BLOCK_AUTH_REDIRECT", "1");
 
     try {
       // India-only phone validation
       const d = onlyDigits(form.phone).replace(/^91/, "");
-      if (d.length !== 10) throw new Error("Enter a valid 10-digit Indian mobile number.");
+      if (d.length !== 10) {
+        const msg = "Enter a valid 10-digit Indian mobile number.";
+        setErr(msg);
+        showToast(msg, "error"); // 👈 validation toast
+        setLoading(false);
+        return;
+      }
 
       const cred = await createUserWithEmailAndPassword(auth, form.email, form.password);
       const uid = cred.user.uid;
@@ -213,13 +219,24 @@ export default function Signup() {
         uid, form.firstName, form.lastName, form.dateOfBirth, form.phone, form.email
       );
 
-      await setDoc(doc(db, "profiles", uid), { displayName, avatar: "", sellerSlug }, { merge: true });
+      if (sellerSlug) {
+        showToast(`Your username “${sellerSlug}” is reserved.`, "success"); // 👈 username toast
+      }
+
+      await setDoc(
+        doc(db, "profiles", uid),
+        { displayName, avatar: "", sellerSlug },
+        { merge: true }
+      );
       await updateProfile(cred.user, { displayName });
 
+      showToast(`Account created! Welcome, ${displayName}.`, "success"); // 👈 success toast
       nav("/", { replace: true });
     } catch (e2) {
       console.error("Signup error:", e2);
-      setErr(e2.message || "Something went wrong.");
+      const msg = e2?.message || "Something went wrong.";
+      setErr(msg);
+      showToast(`Signup failed: ${msg}`, "error"); // 👈 error toast
     } finally {
       sessionStorage.removeItem("BLOCK_AUTH_REDIRECT");
       setLoading(false);
@@ -238,34 +255,58 @@ export default function Signup() {
             <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field className="space-y-2">
                 <Label className="text-sm/5 font-medium">First name</Label>
-                <Input name="firstName" value={form.firstName} onChange={onChange} required
-                  className={clsx("block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent",
+                <Input
+                  name="firstName"
+                  value={form.firstName}
+                  onChange={onChange}
+                  required
+                  className={clsx(
+                    "block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent",
                     "px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6",
-                    "data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black")} />
+                    "data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+                  )}
+                />
               </Field>
               <Field className="space-y-2">
                 <Label className="text-sm/5 font-medium">Last name</Label>
-                <Input name="lastName" value={form.lastName} onChange={onChange} required
-                  className={clsx("block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent",
+                <Input
+                  name="lastName"
+                  value={form.lastName}
+                  onChange={onChange}
+                  required
+                  className={clsx(
+                    "block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent",
                     "px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6",
-                    "data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black")} />
+                    "data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+                  )}
+                />
               </Field>
             </div>
 
             <Field className="mt-5 space-y-2">
               <Label className="text-sm/5 font-medium">Date of birth</Label>
-              <Input type="date" name="dateOfBirth" value={form.dateOfBirth} onChange={onChange} required
-                className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black" />
+              <Input
+                type="date"
+                name="dateOfBirth"
+                value={form.dateOfBirth}
+                onChange={onChange}
+                required
+                className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+              />
             </Field>
 
             <div className="mt-5">
               <Field className="space-y-2">
                 <Label className="text-sm/5 font-medium">Phone (India)</Label>
-                <Input type="tel" name="phone" placeholder="+91 98765 43210"
+                <Input
+                  type="tel"
+                  name="phone"
+                  placeholder="+91 98765 43210"
                   value={formatINPhoneUI(form.phone)}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
                   required
-                  className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black" />
+                  className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+                />
                 <p className="text-xs text-gray-500">
                   Stored as E.164: <code>{toE164IN(form.phone)}</code>
                 </p>
@@ -274,20 +315,38 @@ export default function Signup() {
 
             <Field className="mt-5 space-y-2">
               <Label className="text-sm/5 font-medium">Email</Label>
-              <Input type="email" name="email" value={form.email} onChange={onChange} required
-                className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black" />
+              <Input
+                type="email"
+                name="email"
+                value={form.email}
+                onChange={onChange}
+                required
+                className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+              />
             </Field>
 
             <Field className="mt-5 space-y-2">
               <Label className="text-sm/5 font-medium">Password</Label>
-              <Input type="password" name="password" value={form.password} onChange={onChange} required
-                className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black" />
+              <Input
+                type="password"
+                name="password"
+                value={form.password}
+                onChange={onChange}
+                required
+                className="block w-full rounded-lg shadow-sm ring-1 ring-black/10 border border-transparent px-[calc(--spacing(2)-1px)] py-[calc(--spacing(1.5)-1px)] text-sm/6 data-focus:outline-2 data-focus:-outline-offset-1 data-focus:outline-black"
+              />
             </Field>
 
             {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
 
             <div className="mt-6">
-              <Button type="submit" className="w-full" disabled={loading} loading={loading} loadingText="Creating account…">
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={loading}
+                loading={loading}
+                loadingText="Creating account…"
+              >
                 {loading ? "Creating account..." : "Create account"}
               </Button>
             </div>

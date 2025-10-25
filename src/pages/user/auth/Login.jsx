@@ -10,7 +10,7 @@ import clsx from "clsx";
 import Button from "../../../components/ui/Button";
 import { GradientBackground } from "../../../components/ui/Gradient";
 
-import { useToast } from "../../../components/Toast/ToastProvider"; // 👈 Import useToast
+import { useToast } from "../../../components/Toast/ToastProvider";
 
 export default function Login() {
   const [email, setEmail] = useState("");

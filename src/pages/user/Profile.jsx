@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { db, auth, storage } from "../../firebase";
 import {
-  doc, getDoc, setDoc, updateDoc, deleteDoc,
+  doc, getDoc, setDoc, deleteDoc,
   serverTimestamp, Timestamp,
   collection, query, where, getDocs, writeBatch, limit as fsLimit, startAfter, orderBy,
   onSnapshot, arrayUnion
@@ -11,13 +11,12 @@ import {
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { updateProfile, sendEmailVerification } from "firebase/auth";
 import Button from "../../components/ui/Button";
-import Input from "../../components/ui/Input";
-import { UserCircleIcon } from "@heroicons/react/24/solid";
+import { UserCircleIcon, CheckBadgeIcon } from "@heroicons/react/24/solid";
 import {
   ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon, XMarkIcon,
 } from "@heroicons/react/20/solid";
 import { Container } from "../../components/ui/Container";
-
+import { useToast } from "../../components/Toast/ToastProvider";
 import PageHeading from "../../components/ui/PageHeading";
 
 /* ───────────── Helpers ───────────── */
@@ -115,7 +114,6 @@ function titleFromSlug(slug = "") {
 function computeAreaFromRecent(recent = []) {
   if (!Array.isArray(recent) || recent.length === 0) return "";
   const suffixes = recent.map(s => String(s || "").split("_").pop() || "").filter(Boolean);
-  if (suffixes.length === 0) return "";
   const counts = new Map();
   suffixes.forEach(s => counts.set(s, (counts.get(s) || 0) + 1));
   let max = 0; counts.forEach(v => { if (v > max) max = v; });
@@ -162,11 +160,12 @@ const PAGE_SIZE = 12;
 
 export default function Profile() {
   const { user } = useAuth();
+  const { showToast } = useToast();
 
   // Private profile
   const [pvt, setPvt] = useState({ firstName: "", lastName: "", dateOfBirth: "", phone: "" });
-  const [nameChangeCount, setNameChangeCount] = useState(0); // limit 3
-  const [nameHistory, setNameHistory] = useState([]); // display-only (optional)
+  const [nameChangeCount, setNameChangeCount] = useState(0);
+  const [nameHistory, setNameHistory] = useState([]);
 
   // India-only derived phone fields
   const phoneFormatted = useMemo(() => formatINPhoneUI(pvt.phone), [pvt.phone]);
@@ -194,6 +193,9 @@ export default function Profile() {
   const debTimer = useRef(null);
   const didLoadRef = useRef(false);
   const lastSavedPrivRef = useRef(null);
+
+  // Debounce for slug recompute on name change
+  const slugTimerRef = useRef(null);
 
   /* Calendar state */
   const [isCalOpen, setIsCalOpen] = useState(false);
@@ -226,7 +228,6 @@ export default function Profile() {
       return m - 1;
     });
   };
-
   const goNextMonth = () => {
     setViewMonth((m) => {
       if (m === 11) {
@@ -262,7 +263,7 @@ export default function Profile() {
           getDoc(doc(db, "profiles", user.uid)),
         ]);
         const p = pvtSnap.exists() ? pvtSnap.data() : {};
-        const q = pubSnap.exists() ? pubSnap.data() : {}; // fixed bug
+        const q = pubSnap.exists() ? pubSnap.data() : {};
 
         if (!mounted) return;
 
@@ -276,16 +277,16 @@ export default function Profile() {
         });
         setNameChangeCount(p.nameChangeCount || 0);
         setNameHistory(Array.isArray(p.nameChangeHistory) ? p.nameChangeHistory : []);
-
         setArea(computeAreaFromRecent(p.recentLocations || []));
 
-        const displayComputed =
-          toTitleCaseName(`${fn} ${ln}`.trim()) ||
+        const displayInitial =
+          q.displayName ||
           toTitleCaseName(auth.currentUser?.displayName || "") ||
+          toTitleCaseName(`${fn} ${ln}`.trim()) ||
           toTitleCaseName((user.email || "Seller").split("@")[0]);
 
         setPub({
-          displayName: displayComputed,
+          displayName: displayInitial,
           sellerSlug: q.sellerSlug || "",
           avatar: q.avatar || auth.currentUser?.photoURL || "",
         });
@@ -319,16 +320,7 @@ export default function Profile() {
     return () => unsub();
   }, [user.uid]);
 
-  /* Keep Display Name always First Last (title case) */
-  useEffect(() => {
-    if (!didLoadRef.current) return;
-    const displayComputed = toTitleCaseName(`${pvt.firstName} ${pvt.lastName}`.trim());
-    if (displayComputed && displayComputed !== pub.displayName) {
-      setPub((prev) => ({ ...prev, displayName: displayComputed }));
-    }
-  }, [pvt.firstName, pvt.lastName]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /* Debounced private autosave */
+  /* Debounced private autosave (no public/display name changes here) */
   useEffect(() => {
     if (!didLoadRef.current) return;
     const prev = lastSavedPrivRef.current || {};
@@ -343,7 +335,7 @@ export default function Profile() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pvt.firstName, pvt.lastName, pvt.dateOfBirth, pvt.phone]);
 
-  /* Username availability */
+  /* Username availability helpers */
   const isSlugAvailableForMe = async (slug) => {
     const refDoc = await getDoc(doc(db, "usernames", slug));
     if (!refDoc.exists()) return true;
@@ -395,12 +387,44 @@ export default function Profile() {
     throw new Error("Could not create a unique username. Try different details.");
   };
 
-  /* Save private (with name-change limit + history) */
+  /* Auto-update slug when first/last name changes (if old slug aligned with previous names) */
+  useEffect(() => {
+    if (!didLoadRef.current) return;
+
+    if (slugTimerRef.current) clearTimeout(slugTimerRef.current);
+    slugTimerRef.current = setTimeout(async () => {
+      try {
+        const prev = lastSavedPrivRef.current || { firstName: "", lastName: "" };
+        const wasAlignedWithPrev =
+          pub.sellerSlug
+            ? isSlugNameAligned(pub.sellerSlug, prev.firstName || "", prev.lastName || "")
+            : true;
+
+        if (!wasAlignedWithPrev) return;
+
+        const newSuggested = await computeDesiredSlug();
+        if (newSuggested && newSuggested !== pub.sellerSlug) {
+          setPub((old) => ({ ...old, sellerSlug: newSuggested }));
+        }
+      } catch {
+        /* ignore transient slug errors */
+      }
+    }, 500);
+
+    return () => { if (slugTimerRef.current) clearTimeout(slugTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pvt.firstName, pvt.lastName]);
+
+  /* Save private (no displayName/auth updates here) */
   const savePrivate = async (isAuto = false) => {
     if (!isAuto) { setErr(""); setMsg(""); }
     // India phone check
     const d = onlyDigits(pvt.phone).replace(/^91/, "");
-    if (d && d.length !== 10) { if (!isAuto) setErr("Enter a valid 10-digit Indian mobile number."); return; }
+    if (d && d.length !== 10) {
+      const message = "Enter a valid 10-digit Indian mobile number.";
+      if (!isAuto) { setErr(message); showToast(message, "error"); }
+      return;
+    }
 
     const prev = lastSavedPrivRef.current || {};
     const isNameChanged =
@@ -409,16 +433,14 @@ export default function Profile() {
 
     // Enforce max 3 name edits
     if (isNameChanged && nameChangeCount >= 3) {
-      if (!isAuto) setErr("Name change limit reached (0 of 3 left). You cannot change first/last name anymore.");
-      // revert UI to last saved names
+      const message = "Name change limit reached (0 of 3 left). You cannot change first/last name anymore.";
+      if (!isAuto) { setErr(message); showToast(message, "error"); }
       setPvt((cur) => ({ ...cur, firstName: prev.firstName || "", lastName: prev.lastName || "" }));
       return;
     }
 
     setSavingPriv((s) => (isAuto ? s : true));
     try {
-      const displayComputed = toTitleCaseName(`${pvt.firstName} ${pvt.lastName}`.trim());
-
       const payload = {
         firstName: pvt.firstName.trim(),
         lastName: pvt.lastName.trim(),
@@ -469,13 +491,10 @@ export default function Profile() {
         phone: pvt.phone,
       };
 
-      if (displayComputed && auth.currentUser?.displayName !== displayComputed) {
-        await updateProfile(auth.currentUser, { displayName: displayComputed });
-      }
-      if (!isAuto) setMsg("Saved your private details.");
+      if (!isAuto) { setMsg("Saved your private details."); showToast("Saved your private details.", "success"); }
     } catch (e) {
       console.error(e);
-      if (!isAuto) setErr(e.message || "Failed saving private details.");
+      if (!isAuto) { const m = e.message || "Failed saving private details."; setErr(m); showToast(m, "error"); }
     } finally {
       if (!isAuto) setSavingPriv(false);
     }
@@ -497,11 +516,16 @@ export default function Profile() {
       setPub((prev) => ({ ...prev, avatar: optURL }));
       setFile(null);
       setMsg("Avatar updated.");
-    } catch (e) { console.error(e); setErr(e.message || "Avatar upload failed."); }
+      showToast("Avatar updated.", "success");
+    } catch (e) {
+      console.error(e);
+      const m = e.message || "Avatar upload failed.";
+      setErr(m);
+      showToast(m, "error");
+    }
     finally { setBusyAvatar(false); }
   };
-  const onChangeAvatarClick = () => { if (!busyAvatar) fileInputRef.current?.click(); };
-  const onPickAvatar = async (e) => { const f = e.target.files?.[0]; if (!f) return; setFile(f); await uploadAvatar(f); };
+  const onPickAvatar = async (e) => { const f = e.target.files?.[0]; if (!f) return; await uploadAvatar(f); };
 
   /* Propagate slug to items */
   const propagateNewSlugToItems = async (newSlug) => {
@@ -523,7 +547,7 @@ export default function Profile() {
     }
   };
 
-  /* Save public (slug rules enforced here) */
+  /* Save public (displayName is updated here on submit) */
   const savePublic = async () => {
     setErr(""); setMsg(""); setSavingPub(true);
     try {
@@ -533,6 +557,7 @@ export default function Profile() {
         toTitleCaseName((user.email || "Seller").split("@")[0]);
 
       let desired = (pub.sellerSlug || "").trim().toLowerCase();
+      let coercedTakenNote = "";
 
       if (!desired) {
         desired = await computeDesiredSlug();
@@ -543,7 +568,9 @@ export default function Profile() {
           throw new Error("Username must start with your name (e.g., first-last-… or last-first-…) and include at least 2 name parts.");
         }
         if (!(await isSlugAvailableForMe(chk.value))) {
-          desired = await computeDesiredSlug();
+          const alt = await computeDesiredSlug();
+          coercedTakenNote = ` (chosen alternative “${alt}” because “${desired}” is taken)`;
+          desired = alt;
         } else {
           desired = chk.value;
         }
@@ -575,7 +602,9 @@ export default function Profile() {
 
         if (oldSlug) { await deleteDoc(doc(db, "usernames", oldSlug)).catch(() => {}); }
         setPub((prev) => ({ ...prev, displayName: displayComputed, sellerSlug: desired }));
-        setMsg("Public profile saved and listings updated.");
+        const m = `Public profile saved and listings updated${coercedTakenNote}.`;
+        setMsg(m);
+        showToast(m, "success");
       } else {
         await setDoc(profRef, { displayName: displayComputed }, { merge: true });
         if (displayComputed && auth.currentUser?.displayName !== displayComputed) {
@@ -583,10 +612,13 @@ export default function Profile() {
         }
         setPub((prev) => ({ ...prev, displayName: displayComputed }));
         setMsg("Public profile saved.");
+        showToast("Public profile saved.", "success");
       }
     } catch (e) {
       console.error(e);
-      setErr(e.message || "Failed saving public profile.");
+      const m = e.message || "Failed saving public profile.";
+      setErr(m);
+      showToast(m, "error");
     } finally {
       setSavingPub(false);
     }
@@ -640,6 +672,31 @@ export default function Profile() {
     finally { setLoadingMore(false); }
   };
 
+  /* Keep calendar view in sync & ensure fully visible when opened */
+  useEffect(() => {
+    if (!isCalOpen) return;
+
+    const d = pvt.dateOfBirth ? parseYmdLocal(pvt.dateOfBirth) : new Date();
+    setViewYear(d.getFullYear());
+    setViewMonth(d.getMonth());
+
+    requestAnimationFrame(() => {
+      if (anchorRef.current?.scrollIntoView) {
+        anchorRef.current.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      }
+      setTimeout(() => {
+        const el = calRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const margin = 12;
+        let delta = 0;
+        if (rect.bottom + margin > window.innerHeight) delta = rect.bottom + margin - window.innerHeight;
+        if (rect.top - margin < 0) delta = delta ? delta + (rect.top - margin) : (rect.top - margin);
+        if (delta !== 0) window.scrollBy({ top: delta, behavior: "smooth" });
+      }, 50);
+    });
+  }, [isCalOpen, pvt.dateOfBirth]);
+
   /* Skeleton */
   const Skeleton = () => (
     <div className="space-y-8 animate-pulse">
@@ -655,15 +712,25 @@ export default function Profile() {
         <div className="space-y-8">
           {/* Header */}
           <PageHeading
-              title="Profile"
-              description="Manage your personal info, avatar, and public username. You can change your name up to 3 times."
-            />
+            title="Profile"
+            description="Manage your personal info, avatar, and public username. You can change your name up to 3 times."
+          />
 
           {!auth.currentUser.emailVerified && (
             <div className="rounded-lg border bg-amber-50 p-3 text-sm">
               Your email is not verified. Some actions (like posting) are blocked.
               <div className="mt-2">
-                <Button size="sm" onClick={() => sendEmailVerification(auth.currentUser)}>
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await sendEmailVerification(auth.currentUser);
+                      showToast("Verification email sent.", "info");
+                    } catch (e) {
+                      showToast(e?.message || "Failed to send verification email.", "error");
+                    }
+                  }}
+                >
                   Resend verification email
                 </Button>
               </div>
@@ -689,16 +756,19 @@ export default function Profile() {
                   ) : (
                     <UserCircleIcon aria-hidden="true" className="size-12 text-gray-300" />
                   )}
-                  <button type="button" onClick={() => !busyAvatar && fileInputRef.current?.click()}
+                  <button
+                    type="button"
+                    onClick={() => !busyAvatar && fileInputRef.current?.click()}
                     disabled={busyAvatar}
-                    className={`rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 ${busyAvatar ? "opacity-60 cursor-not-allowed" : ""}`}>
+                    className={`rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring inset-ring-gray-300 hover:bg-gray-50 ${busyAvatar ? "opacity-60 cursor-not-allowed" : ""}`}
+                  >
                     {busyAvatar ? "Uploading..." : "Change"}
                   </button>
                   <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onPickAvatar} />
                 </div>
               </div>
 
-              {/* Name changes counter (near the fields it affects) */}
+              {/* Name changes counter */}
               <div className="col-span-full" aria-live="polite">
                 <div className="flex items-center gap-2">
                   <span
@@ -719,14 +789,14 @@ export default function Profile() {
                   <button
                     type="button"
                     className="text-xs text-gray-500 hover:underline"
-                    onClick={() => alert("To prevent impersonation and maintain trust, we limit name changes to 3.")}
+                    onClick={() => showToast("To prevent impersonation and maintain trust, we limit name changes to 3.", "info")}
                   >
                     Why is there a limit?
                   </button>
                 </div>
               </div>
 
-              {/* First / Last (read-only when nameLocked) */}
+              {/* First / Last */}
               <div className="sm:col-span-3">
                 <label className="block text-sm/6 font-medium text-gray-900">First name</label>
                 <div className="mt-2">
@@ -762,12 +832,24 @@ export default function Profile() {
                 </div>
               </div>
 
-              {/* Email (read-only) */}
+              {/* Email (read-only) with green CheckBadge when verified */}
               <div className="sm:col-span-4">
                 <label className="block text-sm/6 font-medium text-gray-900">Email address</label>
-                <div className="mt-2">
-                  <input type="email" value={user.email || ""} readOnly
-                    className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 sm:text-sm/6"/>
+                <div className="mt-2 relative">
+                  <input
+                    type="email"
+                    value={user.email || ""}
+                    readOnly
+                    className="block w-full rounded-md bg-gray-50 px-3 pr-12 py-1.5 text-base text-gray-900 outline-1 -outline-offset-1 outline-gray-300 sm:text-sm/6"
+                  />
+                  {auth.currentUser?.emailVerified && (
+                    <span
+                      title="Email verified"
+                      className="pointer-events-auto absolute inset-y-0 right-2 flex items-center"
+                    >
+                      <CheckBadgeIcon className="size-6 text-green-600" aria-hidden="true" />
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -775,9 +857,19 @@ export default function Profile() {
               <div className="sm:col-span-3 relative">
                 <label className="block text-sm/6 font-medium text-gray-900">Date of birth</label>
                 <div className="mt-2">
-                  <button type="button" onClick={() => setIsCalOpen((o)=>!o)} ref={anchorRef}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = pvt.dateOfBirth ? parseYmdLocal(pvt.dateOfBirth) : new Date();
+                      setViewYear(d.getFullYear());
+                      setViewMonth(d.getMonth());
+                      setIsCalOpen(true);
+                    }}
+                    ref={anchorRef}
                     className="flex w-full items-center justify-between rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-base text-gray-900 outline-none focus:ring-2 focus:ring-indigo-600"
-                    aria-haspopup="dialog" aria-expanded={isCalOpen}>
+                    aria-haspopup="dialog"
+                    aria-expanded={isCalOpen}
+                  >
                     <span className={pvt.dateOfBirth ? "" : "text-gray-500"}>
                       {pvt.dateOfBirth
                         ? parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })
@@ -788,8 +880,12 @@ export default function Profile() {
                 </div>
 
                 {isCalOpen && (
-                  <div ref={calRef} role="dialog" aria-label="Choose date of birth"
-                    className="absolute left-0 right-0 z-20 mt-2 w-full overflow-hidden rounded-2xl border bg-white shadow-xl">
+                  <div
+                    ref={calRef}
+                    role="dialog"
+                    aria-label="Choose date of birth"
+                    className="absolute left-0 right-0 z-20 mt-2 w-full overflow-hidden rounded-2xl border bg-white shadow-xl"
+                  >
                     <div className="p-4">
                       <div className="flex items-center">
                         <h3 className="flex-auto text-sm font-semibold text-gray-900">{monthLabel}</h3>
@@ -807,44 +903,36 @@ export default function Profile() {
                       <div className="mt-6 grid grid-cols-7 text-center text-xs/6 text-gray-500">
                         <div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div><div>S</div>
                       </div>
+
                       <div className="mt-2 grid grid-cols-7 text-sm">
-                        {days.map((day) => (
-                          <div key={day.date} className="py-2 not-first:border-t not-first:border-gray-200">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPvt((prev)=>({ ...prev, dateOfBirth: day.date }));
-                                const d = parseYmdLocal(day.date);
-                                setViewYear(d.getFullYear());
-                                setViewMonth(d.getMonth());
-                                setIsCalOpen(false);
-                              }}
-                              className="mx-auto flex size-8 items-center justify-center rounded-full hover:bg-gray-200"
-                            >
-                              <time dateTime={day.date}>{day.date.split("-").pop().replace(/^0/,"")}</time>
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="mt-4 flex items-center justify-between border-t pt-3 text-xs text-gray-600">
-                        <span>
-                          {pvt.dateOfBirth
-                            ? `Selected: ${parseYmdLocal(pvt.dateOfBirth).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}`
-                            : "No date selected"}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const ymd = fmtYmd(new Date());
-                            setPvt((prev)=>({ ...prev, dateOfBirth: ymd }));
-                            const d = new Date();
-                            setViewYear(d.getFullYear());
-                            setViewMonth(d.getMonth());
-                          }}
-                          className="rounded px-2 py-1 hover:bg-gray-100"
-                        >
-                          Today
-                        </button>
+                        {days.map((day) => {
+                          const isSelected = day.isSelected;
+                          const isCurrentMonth = day.isCurrentMonth;
+                          return (
+                            <div key={day.date} className="py-2 not-first:border-t not-first:border-gray-200">
+                              <button
+                                type="button"
+                                aria-selected={isSelected}
+                                onClick={() => {
+                                  setPvt((prev)=>({ ...prev, dateOfBirth: day.date }));
+                                  const d = parseYmdLocal(day.date);
+                                  setViewYear(d.getFullYear());
+                                  setViewMonth(d.getMonth());
+                                  setIsCalOpen(false);
+                                }}
+                                className={[
+                                  "mx-auto flex size-8 items-center justify-center rounded-full",
+                                  isSelected ? "bg-red-600 text-white" : "hover:bg-gray-200",
+                                  !isCurrentMonth ? "text-gray-400" : ""
+                                ].join(" ")}
+                              >
+                                <time dateTime={day.date}>
+                                  {day.date.split("-").pop().replace(/^0/,"")}
+                                </time>
+                              </button>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -896,7 +984,7 @@ export default function Profile() {
                 <div className="mt-2">
                   <input type="text" value={pub.displayName} readOnly
                     className="block w-full rounded-md bg-gray-50 px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 sm:text-sm/6" />
-                  <p className="mt-1 text-xs text-neutral-500">Comes from your first &amp; last name.</p>
+                  <p className="mt-1 text-xs text-neutral-500">Updates when you save your public profile.</p>
                 </div>
               </div>
 
@@ -921,7 +1009,7 @@ export default function Profile() {
             </div>
           </div>
 
-          {/* MARKETPLACE LISTINGS (unchanged) */}
+          {/* MARKETPLACE LISTINGS (unchanged placeholder) */}
           {/* ... keep your listings section here ... */}
 
           {err && <p className="text-sm text-rose-600">{err}</p>}
