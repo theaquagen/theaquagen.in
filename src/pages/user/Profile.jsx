@@ -412,7 +412,7 @@ export default function Profile() {
     }, 500);
 
     return () => { if (slugTimerRef.current) clearTimeout(slugTimerRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-line react-hooks/exhaustive-deps
   }, [pvt.firstName, pvt.lastName]);
 
   /* Save private (no displayName/auth updates here) */
@@ -860,10 +860,14 @@ export default function Profile() {
                   <button
                     type="button"
                     onClick={() => {
-                      const d = pvt.dateOfBirth ? parseYmdLocal(pvt.dateOfBirth) : new Date();
-                      setViewYear(d.getFullYear());
-                      setViewMonth(d.getMonth());
-                      setIsCalOpen(true);
+                      if (!isCalOpen) {
+                        const d = pvt.dateOfBirth ? parseYmdLocal(pvt.dateOfBirth) : new Date();
+                        setViewYear(d.getFullYear());
+                        setViewMonth(d.getMonth());
+                        setIsCalOpen(true);
+                      } else {
+                        setIsCalOpen(false);
+                      }
                     }}
                     ref={anchorRef}
                     className="flex w-full items-center justify-between rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-base text-gray-900 outline-none focus:ring-2 focus:ring-indigo-600"

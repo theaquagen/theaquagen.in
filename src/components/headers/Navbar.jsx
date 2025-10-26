@@ -10,13 +10,29 @@ import {
   doc, getDoc, setDoc, writeBatch, serverTimestamp, increment,
 } from 'firebase/firestore'
 
-const LOC_SESSION_KEY = 'app:location:session:v1'
+/**
+ * BEHAVIOR SUMMARY
+ * - Auto-detect runs at most once per user session unless:
+ *    • there is no cache, or
+ *    • the cached OK reading is older than AUTO_DETECT_STALE_MS, or
+ *    • user clicks the Refresh button manually.
+ * - If the user denied/error, we cache that state and SUPPRESS auto-detect for SUPPRESS_DENIED_MS.
+ * - All caches are namespaced per-user and cleared on logout or user change.
+ */
+
+const LOC_SESSION_KEY = 'app:location:session:v1'          // per-user namespace applied at runtime
 const LOC_ANIM_KEY = 'app:location:animShown'
 const GEO_CACHE_KEY = 'app:geocache:v2'
+
+// Controls
+const AUTO_DETECT_STALE_MS = 12 * 60 * 60 * 1000           // 12h — if OK cache older than this, re-detect on mount
+const SUPPRESS_DENIED_MS = 6 * 60 * 60 * 1000              // 6h  — don't re-trigger browser prompt every refresh after denied/error
+const REFRESH_COOLDOWN_MS = 1200                           // UI cooldown between manual refreshes
+
+// Legacy constants (left for reference / future use)
 const AUTO_CHECK_ON_FOCUS = false
 const STALE_DEVICE_READING_MS = 30 * 60 * 1000
 const DISTANCE_THRESHOLD_KM = 15
-const REFRESH_COOLDOWN_MS = 1200
 
 // Clears all location-related caches (call this on logout)
 const clearLocationCaches = () => {
@@ -24,7 +40,6 @@ const clearLocationCaches = () => {
     sessionStorage.removeItem(LOC_SESSION_KEY)
     sessionStorage.removeItem(LOC_ANIM_KEY)
     sessionStorage.removeItem(GEO_CACHE_KEY)
-    // Also remove any per-user namespaced variants
     const keys = Object.keys(sessionStorage)
     for (const k of keys) {
       if (k.startsWith(`${LOC_SESSION_KEY}:`)) sessionStorage.removeItem(k)
@@ -73,7 +88,7 @@ async function saveLocationIfChanged(uid, { lat, lon, city, region, country, lab
   const roc = region || country || ''
   const userRef = doc(db, 'users', uid)
   const profRef = doc(db, 'profiles', uid)
-  const histRef = doc(db, 'users', uid, 'locations', locId(city, roc))
+  const histRef = doc(db, 'users', uid, 'locations', locId(city || '', roc || ''))
 
   const snap = await getDoc(userRef)
   const prev = snap.exists() ? snap.data() : {}
@@ -82,7 +97,7 @@ async function saveLocationIfChanged(uid, { lat, lon, city, region, country, lab
   const newKey = `${(city||'').toLowerCase()}|${(roc||'').toLowerCase()}`
 
   const recent = Array.isArray(prev.recentLocations) ? prev.recentLocations : []
-  const newSlug = locId(city, roc)
+  const newSlug = locId(city || '', roc || '')
   const newRecent = [newSlug, ...recent.filter(x => x !== newSlug)].slice(0, 20)
   const computedArea = computeAreaFromRecent(newRecent)
 
@@ -123,7 +138,6 @@ async function saveLocationIfChanged(uid, { lat, lon, city, region, country, lab
 function useCurrentLocation() {
   const { user } = useAuth()
   const [state, setState] = useState({ status: 'idle', label: null, lastUpdated: null, refreshing: false, lat: null, lon: null })
-  const lastAutoCheck = useRef(0)
   const cooldownUntil = useRef(0)
   const prevUid = useRef(null)
 
@@ -138,6 +152,8 @@ function useCurrentLocation() {
   const cacheGet = () => {
     try { return JSON.parse(sessionStorage.getItem(cacheKey) || 'null') } catch { return null }
   }
+  const cacheRemove = () => { try { sessionStorage.removeItem(cacheKey) } catch {} }
+
   const geoCacheGet = (key) => { try { const map = JSON.parse(sessionStorage.getItem(GEO_CACHE_KEY) || '{}'); return map[key] || null } catch { return null } }
   const geoCacheSet = (key, obj) => { try { const map = JSON.parse(sessionStorage.getItem(GEO_CACHE_KEY) || '{}'); map[key] = obj; sessionStorage.setItem(GEO_CACHE_KEY, JSON.stringify(map)) } catch {} }
 
@@ -169,14 +185,15 @@ function useCurrentLocation() {
       setState({ status: 'ok', label, refreshing: false, lastUpdated: Date.now(), lat, lon })
       if (user) await saveLocationIfChanged(user.uid, { lat, lon, city, region, country, label })
     } catch {
-      // Don't cache error/denied; allow new sessions to retry
+      // Cache the error with timestamp to suppress repeated prompts for a while
+      cacheSet({ status: 'error' })
       setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() }))
     }
   }
 
   const detectOnce = () => {
     if (!('geolocation' in navigator)) {
-      // Don't cache error; keep session fresh for next user
+      cacheSet({ status: 'error' })
       setState({ status: 'error', label: null, refreshing: false, lastUpdated: Date.now(), lat: null, lon: null })
       return
     }
@@ -185,7 +202,8 @@ function useCurrentLocation() {
       (pos) => { const { latitude, longitude } = pos.coords; reverseGeocodeAndSet(latitude, longitude, { setAnimShown: true }) },
       (err) => {
         const status = err.code === err.PERMISSION_DENIED ? 'denied' : 'error'
-        // Don't cache denied/error so a new session/user can be prompted again
+        // Cache denied/error so we DON'T auto-detect again on every page refresh for this user
+        cacheSet({ status })
         setState(s => ({ ...s, status, refreshing: false, lastUpdated: Date.now() }))
       },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 60_000 }
@@ -196,6 +214,7 @@ function useCurrentLocation() {
     const now = Date.now()
     if (now < cooldownUntil.current) return
     if (!('geolocation' in navigator)) {
+      cacheSet({ status: 'error' })
       setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() }))
       return
     }
@@ -207,7 +226,7 @@ function useCurrentLocation() {
         cooldownUntil.current = Date.now() + REFRESH_COOLDOWN_MS
       },
       () => {
-        // Don't cache error
+        cacheSet({ status: 'error' })
         setState(s => ({ ...s, status: 'error', refreshing: false, lastUpdated: Date.now() }))
       },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 0 }
@@ -219,7 +238,6 @@ function useCurrentLocation() {
     if (prevUid.current !== (user?.uid ?? null)) {
       prevUid.current = user?.uid ?? null
       try {
-        // Clear per-user cache for the new user context
         const key = user?.uid ? `${LOC_SESSION_KEY}:${user.uid}` : `${LOC_SESSION_KEY}:anon`
         sessionStorage.removeItem(key)
         sessionStorage.removeItem(LOC_ANIM_KEY)
@@ -228,16 +246,49 @@ function useCurrentLocation() {
     }
   }, [user?.uid])
 
+  // On mount or when user changes: decide whether to auto-detect
   useEffect(() => {
     const cached = cacheGet()
-    if (cached?.status === 'ok' && cached?.label) {
-      setState({ status: 'ok', label: cached.label, refreshing: false, lastUpdated: cached.fetchedAt, lat: cached.lat ?? null, lon: cached.lon ?? null })
-      return
+    const now = Date.now()
+
+    // If we have a cached OK and it's fresh, use it and don't re-detect on refresh
+    if (cached?.status === 'ok' && cached?.label && cached?.fetchedAt) {
+      const age = now - cached.fetchedAt
+      if (age < AUTO_DETECT_STALE_MS) {
+        setState({
+          status: 'ok',
+          label: cached.label,
+          refreshing: false,
+          lastUpdated: cached.fetchedAt,
+          lat: cached.lat ?? null,
+          lon: cached.lon ?? null
+        })
+        return
+      }
+      // stale -> fall through to re-detect once
     }
-    // For anything else (no cache or prior denied/error not cached), detect now
+
+    // If user previously denied or we errored recently, suppress auto-detect for a while
+    if ((cached?.status === 'denied' || cached?.status === 'error') && cached?.fetchedAt) {
+      const age = now - cached.fetchedAt
+      if (age < SUPPRESS_DENIED_MS) {
+        setState(s => ({
+          ...s,
+          status: cached.status,
+          refreshing: false,
+          lastUpdated: cached.fetchedAt
+        }))
+        return
+      } else {
+        // suppression expired -> clear and try again
+        cacheRemove()
+      }
+    }
+
+    // No usable cache -> detect once
     detectOnce()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]) // rerun when user changes to establish fresh state
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid])
 
   return { ...state, refresh }
 }
@@ -304,9 +355,14 @@ function LocationChip() {
           <span>{formatAgo(lastUpdated)}</span>
         </span>
       )}
-      <button type="button" onClick={refresh} disabled={refreshing} aria-busy={refreshing}
+      <button
+        type="button"
+        onClick={refresh}
+        disabled={refreshing}
+        aria-busy={refreshing}
         title={refreshing ? 'Refreshing…' : 'Refresh location'}
-        className="ml-0.5 inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium text-white/90 hover:bg-white/10 active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed">
+        className="ml-0.5 inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium text-white/90 hover:bg-white/10 active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
         {refreshing ? <ArrowPathIcon className="w-4 h-4 animate-spin" /> : justUpdated ? <CheckIcon className="w-4 h-4" /> : <ArrowPathIcon className="w-4 h-4" />}
       </button>
     </div>
@@ -314,7 +370,14 @@ function LocationChip() {
 
   return shouldAnimate ? (
     <AnimatePresence initial={false} mode="wait">
-      <motion.div key={text} initial={{ opacity: 0, y: -6, rotateX: -12 }} animate={{ opacity: 1, y: 0, rotateX: 0 }} exit={{ opacity: 0, y: -6, rotateX: 8 }} transition={{ duration: 0.28, ease: 'easeInOut' }} title="Your approximate location">
+      <motion.div
+        key={text}
+        initial={{ opacity: 0, y: -6, rotateX: -12 }}
+        animate={{ opacity: 1, y: 0, rotateX: 0 }}
+        exit={{ opacity: 0, y: -6, rotateX: 8 }}
+        transition={{ duration: 0.28, ease: 'easeInOut' }}
+        title="Your approximate location"
+      >
         {ChipInner}
       </motion.div>
     </AnimatePresence>
@@ -388,7 +451,7 @@ export function Navbar() {
 
   const handleLogout = async () => {
     try {
-      clearLocationCaches() // <-- wipe location-related caches on logout
+      clearLocationCaches() // wipe location-related caches on logout
       await logout()
       navigate(isAdminRoute ? '/admin/login' : '/login')
     } catch {}
