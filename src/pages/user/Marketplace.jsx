@@ -71,8 +71,6 @@ export default function Marketplace() {
 
   // Load user's profile (kept for favorites path only)
   useEffect(() => {
-    // No district/location UI in this version; only favorites uses user.uid
-    // Still safe to check user doc if you want other metadata later:
     (async () => {
       try { await getDoc(doc(db, "users", user.uid)); } catch {}
     })();
@@ -89,12 +87,10 @@ export default function Marketplace() {
   // ----- Query builder (server-side filters: categories + sort, pagination) -----
   const buildQuery = (cursor) => {
     const constraints = [];
-    // Category filter via "in" when 1-10 selected; otherwise no category constraint
     const catArr = Array.from(selectedCategories);
     if (catArr.length > 0 && catArr.length <= 10) {
       constraints.push(where("category", "in", catArr));
     }
-    // Sorting
     if (sort === "priceAsc") constraints.push(orderBy("price", "asc"));
     else if (sort === "priceDesc") constraints.push(orderBy("price", "desc"));
     else constraints.push(orderBy("createdAt", "desc"));
@@ -104,7 +100,7 @@ export default function Marketplace() {
     return query(collection(db, "items"), ...constraints);
   };
 
-  // ----- Fetch on filter/sort change (server-side piece only) -----
+  // ----- Fetch on filter/sort change -----
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -121,9 +117,9 @@ export default function Marketplace() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sort, selectedCategories]); // price/color/size are client-side filters
+  }, [sort, selectedCategories]);
 
-  // Pagination (continues the same server-side constraints)
+  // Pagination
   const loadMore = async () => {
     if (endReached || loadingMore) return;
     setLoadingMore(true);
@@ -137,11 +133,10 @@ export default function Marketplace() {
     finally { setLoadingMore(false); }
   };
 
-  // ----- Client-side filters (Price, and placeholders for color/size) -----
+  // ----- Client-side filters -----
   const priceInBuckets = (price, bucketsSet) => {
     if (!bucketsSet || bucketsSet.size === 0) return true;
     const p = Number(price) || 0;
-    // bucket '0' => [0,25), '25' => [25,50), '50' => [50,75), '75' => [75, +inf)
     const matches = [];
     if (bucketsSet.has('0'))  matches.push(p >= 0 && p < 25);
     if (bucketsSet.has('25')) matches.push(p >= 25 && p < 50);
@@ -151,10 +146,8 @@ export default function Marketplace() {
   };
 
   const filteredItems = useMemo(() => {
-    // Price filter only (color/size placeholders included for future)
     return items.filter((it) => {
       const okPrice = priceInBuckets(it.price, selectedPrices);
-      // If you later add fields like it.color / it.size, apply here:
       const okColor = selectedColors.size === 0 ? true : selectedColors.has((it.color || '').toLowerCase());
       const okSize  = selectedSizes.size === 0 ? true : selectedSizes.has((it.size  || '').toLowerCase());
       return okPrice && okColor && okSize;
@@ -192,7 +185,7 @@ export default function Marketplace() {
             description="Browse items from your community. Use filters or sort to find your next great deal."
           />
 
-        {/* Filters (Disclosure bar + panel) */}
+        {/* Filters */}
         <Disclosure
           as="section"
           aria-labelledby="filter-heading"
@@ -392,7 +385,7 @@ export default function Marketplace() {
               </>
             )}
 
-            {/* Pagination (loads more server items; client filters still apply after append) */}
+            {/* Pagination */}
             <div className="flex justify-center pt-8">
               {!endReached && items.length > 0 && (
                 <Button onClick={loadMore} loading={loadingMore} loadingText="Loading…">
@@ -410,54 +403,73 @@ export default function Marketplace() {
   );
 }
 
+/**
+ * New chalet-style glass card
+ */
 function ItemCard({ it, isFav }) {
   const thumb = it.images?.[0]?.optimizedURL || it.images?.[0]?.originalURL;
-  const name = it.ownerName || "Unknown";
-  const avatar = it.ownerPhotoURL || "";
-  const slug = it.ownerSlug;
+  const title = it.title || "Untitled";
+  const desc =
+    it.description ||
+    "Cozy find with great value and quick pickup available.";
+  const price = Number(it.price || 0).toFixed(2);
+  const category = it.category || "Other";
 
   return (
-    <div className="rounded-lg border bg-white overflow-hidden flex flex-col">
-      <Link to={`/marketplace/${it.id}`} className="block">
-        {thumb ? (
-          <img src={thumb} alt={it.title} className="h-40 w-full object-cover" />
-        ) : (
-          <div className="h-40 w-full grid place-items-center text-neutral-400">No image</div>
-        )}
-      </Link>
-
-      <div className="p-3 space-y-2 flex-1">
-        <Link to={`/marketplace/${it.id}`} className="font-medium hover:underline line-clamp-1">{it.title}</Link>
-        <div className="text-sm text-neutral-600">
-          ${Number(it.price).toFixed(2)} • {it.location} • {it.category || "Other"}
-        </div>
-
-        {slug ? (
-          <Link to={`/s/${slug}`} className="flex items-center gap-2 pt-1">
-            <div className="h-6 w-6 rounded-full overflow-hidden bg-neutral-100 border">
-              {avatar ? (
-                <img src={avatar} alt={name} className="h-full w-full object-cover" />
-              ) : (
-                <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">?</div>
-              )}
-            </div>
-            <div className="text-xs text-neutral-700">
-              Listed by <span className="font-medium underline">{name}</span>
-            </div>
-          </Link>
-        ) : (
-          <div className="flex items-center gap-2 pt-1">
-            <div className="h-6 w-6 rounded-full overflow-hidden bg-neutral-100 border">
-              {avatar ? <img src={avatar} alt={name} className="h-full w-full object-cover" /> : <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">?</div>}
-            </div>
-            <div className="text-xs text-neutral-700">Listed by <span className="font-medium">{name}</span></div>
-          </div>
-        )}
-      </div>
-
-      <div className="p-3 pt-0">
+    <div className="relative">
+      {/* Favorite overlay (keeps your existing FavButton behavior) */}
+      <div className="absolute right-3 top-3 z-20">
         <FavButton itemId={it.id} isFav={isFav} />
       </div>
+
+      <Link
+        to={`/marketplace/${it.id}`}
+        className="group block overflow-hidden rounded-3xl shadow-xl ring-1 ring-black/5"
+      >
+        <div className="relative h-72 w-full">
+          {/* Background image */}
+          {thumb ? (
+            <img
+              src={thumb}
+              alt={title}
+              className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            />
+          ) : (
+            <div className="absolute inset-0 grid h-full w-full place-items-center bg-neutral-200 text-neutral-500">
+              No image
+            </div>
+          )}
+
+          {/* Gradient glass fade */}
+          <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/20 to-black/70" />
+
+          {/* Content (bottom) */}
+          <div className="absolute inset-x-0 bottom-0 p-6 sm:p-7">
+            <h3 className="text-white text-xl font-semibold drop-shadow-sm">
+              {title}
+            </h3>
+
+            <p className="mt-2 text-white/80 text-sm leading-relaxed line-clamp-2">
+              {desc}
+            </p>
+
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white backdrop-blur-md ring-1 ring-white/20">
+                {category}
+              </span>
+              <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white backdrop-blur-md ring-1 ring-white/20">
+                ${price}
+              </span>
+            </div>
+
+            <div className="mt-5">
+              <div className="inline-flex w-full items-center justify-center rounded-full bg-white px-5 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-white/90">
+                Reserve now
+              </div>
+            </div>
+          </div>
+        </div>
+      </Link>
     </div>
   );
 }
@@ -479,7 +491,13 @@ function FavButton({ itemId, isFav }) {
     } finally { setBusy(false); }
   };
   return (
-    <Button variant={isFav ? "secondary" : "outline"} size="sm" onClick={toggle} loading={busy}>
+    <Button
+      variant={isFav ? "secondary" : "outline"}
+      size="sm"
+      onClick={toggle}
+      loading={busy}
+      className="backdrop-blur-md !rounded-full !bg-white/80 !text-neutral-900 hover:!bg-white"
+    >
       {isFav ? "★ Favorited" : "☆ Favorite"}
     </Button>
   );
