@@ -48,6 +48,12 @@ const PRICE_BUCKETS = [
 const buildCategoryOptions = () =>
   CATEGORIES.map((c) => ({ value: c, label: c }));
 
+/**
+ * Choose the card design here.
+ * Options: "classic" | "minimal" | "overlay" | "mediaLeft" | "compact"
+ */
+const CARD_VARIANT = "overlay"; // ← change this to preview different card UIs
+
 export default function Marketplace() {
   const { user } = useAuth();
 
@@ -71,8 +77,6 @@ export default function Marketplace() {
 
   // Load user's profile (kept for favorites path only)
   useEffect(() => {
-    // No district/location UI in this version; only favorites uses user.uid
-    // Still safe to check user doc if you want other metadata later:
     (async () => {
       try { await getDoc(doc(db, "users", user.uid)); } catch {}
     })();
@@ -89,12 +93,10 @@ export default function Marketplace() {
   // ----- Query builder (server-side filters: categories + sort, pagination) -----
   const buildQuery = (cursor) => {
     const constraints = [];
-    // Category filter via "in" when 1-10 selected; otherwise no category constraint
     const catArr = Array.from(selectedCategories);
     if (catArr.length > 0 && catArr.length <= 10) {
       constraints.push(where("category", "in", catArr));
     }
-    // Sorting
     if (sort === "priceAsc") constraints.push(orderBy("price", "asc"));
     else if (sort === "priceDesc") constraints.push(orderBy("price", "desc"));
     else constraints.push(orderBy("createdAt", "desc"));
@@ -141,7 +143,6 @@ export default function Marketplace() {
   const priceInBuckets = (price, bucketsSet) => {
     if (!bucketsSet || bucketsSet.size === 0) return true;
     const p = Number(price) || 0;
-    // bucket '0' => [0,25), '25' => [25,50), '50' => [50,75), '75' => [75, +inf)
     const matches = [];
     if (bucketsSet.has('0'))  matches.push(p >= 0 && p < 25);
     if (bucketsSet.has('25')) matches.push(p >= 25 && p < 50);
@@ -151,10 +152,8 @@ export default function Marketplace() {
   };
 
   const filteredItems = useMemo(() => {
-    // Price filter only (color/size placeholders included for future)
     return items.filter((it) => {
       const okPrice = priceInBuckets(it.price, selectedPrices);
-      // If you later add fields like it.color / it.size, apply here:
       const okColor = selectedColors.size === 0 ? true : selectedColors.has((it.color || '').toLowerCase());
       const okSize  = selectedSizes.size === 0 ? true : selectedSizes.has((it.size  || '').toLowerCase());
       return okPrice && okColor && okSize;
@@ -188,9 +187,9 @@ export default function Marketplace() {
     <Container className="my-16">
       <div className="space-y-8">
         <PageHeading
-            title="Marketplace"
-            description="Browse items from your community. Use filters or sort to find your next great deal."
-          />
+          title="Marketplace"
+          description="Browse items from your community. Use filters or sort to find your next great deal."
+        />
 
         {/* Filters (Disclosure bar + panel) */}
         <Disclosure
@@ -198,9 +197,7 @@ export default function Marketplace() {
           aria-labelledby="filter-heading"
           className="grid items-center border-t border-b border-gray-200"
         >
-          <h2 id="filter-heading" className="sr-only">
-            Filters
-          </h2>
+          <h2 id="filter-heading" className="sr-only">Filters</h2>
 
           {/* Left: filter toggle + count, Clear all */}
           <div className="relative col-start-1 row-start-1 py-4">
@@ -381,7 +378,7 @@ export default function Marketplace() {
               <div className="text-sm text-neutral-500">Loading…</div>
             ) : (
               <>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
                   {filteredItems.map((it) => (
                     <ItemCard key={it.id} it={it} isFav={favIds.has(it.id)} />
                   ))}
@@ -410,61 +407,299 @@ export default function Marketplace() {
   );
 }
 
-function ItemCard({ it, isFav }) {
+/* -------------------------- Shared helpers -------------------------- */
+function useItemBasics(it) {
   const thumb = it.images?.[0]?.optimizedURL || it.images?.[0]?.originalURL;
   const name = it.ownerName || "Unknown";
   const avatar = it.ownerPhotoURL || "";
   const slug = it.ownerSlug;
+  const price = Number(it.price).toFixed(2);
+  const category = it.category || "Other";
+  const location = it.location || "Unknown location";
+  return { thumb, name, avatar, slug, price, category, location };
+}
 
+/* ------------------------- Card Variant Router ------------------------- */
+function ItemCard({ it, isFav }) {
+  switch (CARD_VARIANT) {
+    case "minimal":   return <CardMinimal it={it} isFav={isFav} />;
+    case "overlay":   return <CardOverlay it={it} isFav={isFav} />;
+    case "mediaLeft": return <CardMediaLeft it={it} isFav={isFav} />;
+    case "compact":   return <CardCompact it={it} isFav={isFav} />;
+    case "classic":
+    default:          return <CardClassic it={it} isFav={isFav} />;
+  }
+}
+
+/* ------------------------------ Variant 1: Classic (previous premium) ------------------------------ */
+function CardClassic({ it, isFav }) {
+  const { thumb, name, avatar, slug, price, category, location } = useItemBasics(it);
   return (
-    <div className="rounded-lg border bg-white overflow-hidden flex flex-col">
+    <div className="group relative flex flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm transition hover:shadow-md">
       <Link to={`/marketplace/${it.id}`} className="block">
-        {thumb ? (
-          <img src={thumb} alt={it.title} className="h-40 w-full object-cover" />
-        ) : (
-          <div className="h-40 w-full grid place-items-center text-neutral-400">No image</div>
-        )}
+        <div className="relative w-full aspect-[4/3] overflow-hidden bg-neutral-50">
+          {thumb ? (
+            <img
+              src={thumb}
+              alt={it.title}
+              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+              loading="lazy"
+            />
+          ) : (
+            <div className="h-full w-full grid place-items-center text-neutral-400 text-sm">No image</div>
+          )}
+          <div className="absolute left-3 top-3 rounded-full bg-white/90 px-3 py-1 text-sm font-semibold text-gray-900 shadow-sm backdrop-blur">
+            ${price}
+          </div>
+        </div>
       </Link>
 
-      <div className="p-3 space-y-2 flex-1">
-        <Link to={`/marketplace/${it.id}`} className="font-medium hover:underline line-clamp-1">{it.title}</Link>
-        <div className="text-sm text-neutral-600">
-          ${Number(it.price).toFixed(2)} • {it.location} • {it.category || "Other"}
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        <Link to={`/marketplace/${it.id}`} className="block">
+          <h3 className="line-clamp-2 text-base font-semibold leading-snug text-gray-900 hover:underline">
+            {it.title}
+          </h3>
+        </Link>
+
+        <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-600">
+          {category && <span className="rounded-full border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700">{category}</span>}
+          <span className="text-neutral-500">•</span>
+          <span className="truncate">{location}</span>
         </div>
 
-        {slug ? (
-          <Link to={`/s/${slug}`} className="flex items-center gap-2 pt-1">
-            <div className="h-6 w-6 rounded-full overflow-hidden bg-neutral-100 border">
-              {avatar ? (
-                <img src={avatar} alt={name} className="h-full w-full object-cover" />
-              ) : (
-                <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">?</div>
-              )}
+        <div className="mt-auto flex items-center justify-between pt-1">
+          {slug ? (
+            <Link to={`/s/${slug}`} className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} />
+              <div className="text-sm text-neutral-700">
+                <span className="text-neutral-500">by</span>{" "}
+                <span className="font-medium underline decoration-neutral-300 underline-offset-2">{name}</span>
+              </div>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} />
+              <div className="text-sm text-neutral-700"><span className="text-neutral-500">by</span> <span className="font-medium">{name}</span></div>
             </div>
-            <div className="text-xs text-neutral-700">
-              Listed by <span className="font-medium underline">{name}</span>
-            </div>
-          </Link>
-        ) : (
-          <div className="flex items-center gap-2 pt-1">
-            <div className="h-6 w-6 rounded-full overflow-hidden bg-neutral-100 border">
-              {avatar ? <img src={avatar} alt={name} className="h-full w-full object-cover" /> : <div className="h-full w-full grid place-items-center text-[10px] text-neutral-400">?</div>}
-            </div>
-            <div className="text-xs text-neutral-700">Listed by <span className="font-medium">{name}</span></div>
-          </div>
-        )}
-      </div>
-
-      <div className="p-3 pt-0">
-        <FavButton itemId={it.id} isFav={isFav} />
+          )}
+          <FavButton itemId={it.id} isFav={isFav} />
+        </div>
       </div>
     </div>
   );
 }
 
-function FavButton({ itemId, isFav }) {
+/* ------------------------------ Variant 2: Minimal (very clean, flat) ------------------------------ */
+function CardMinimal({ it, isFav }) {
+  const { thumb, name, avatar, slug, price, category, location } = useItemBasics(it);
+  return (
+    <div className="group flex flex-col overflow-hidden rounded-xl bg-white ring-1 ring-gray-200 transition hover:ring-gray-300">
+      <Link to={`/marketplace/${it.id}`} className="block">
+        <div className="relative aspect-[16/10] w-full overflow-hidden bg-neutral-50">
+          {thumb ? (
+            <img src={thumb} alt={it.title} className="h-full w-full object-cover" loading="lazy" />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-neutral-400 text-sm">No image</div>
+          )}
+        </div>
+      </Link>
+
+      <div className="flex flex-col gap-3 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <Link to={`/marketplace/${it.id}`} className="flex-1">
+            <h3 className="line-clamp-2 text-base font-semibold text-gray-900">
+              {it.title}
+            </h3>
+          </Link>
+          <div className="shrink-0 rounded-md bg-gray-50 px-2 py-1 text-sm font-semibold text-gray-900">
+            ${price}
+          </div>
+        </div>
+
+        <div className="text-sm text-neutral-600">{location}</div>
+
+        <div className="mt-2 flex items-center justify-between border-t pt-3">
+          {slug ? (
+            <Link to={`/s/${slug}`} className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} size="7" />
+              <span className="text-sm text-neutral-700">{name}</span>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} size="7" />
+              <span className="text-sm text-neutral-700">{name}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border px-2 py-0.5 text-xs text-gray-700">{category}</span>
+            <FavButton itemId={it.id} isFav={isFav} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ Variant 3: Overlay (text on image) ------------------------------ */
+function CardOverlay({ it, isFav }) {
+  const { thumb, name, avatar, slug, price, category, location } = useItemBasics(it);
+  return (
+    <div className="group relative overflow-hidden rounded-2xl">
+      <Link to={`/marketplace/${it.id}`} className="block">
+        <div className="relative aspect-[4/3] w-full overflow-hidden">
+          {thumb ? (
+            <img
+              src={thumb}
+              alt={it.title}
+              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.05]"
+              loading="lazy"
+            />
+          ) : (
+            <div className="grid h-full w-full place-items-center bg-neutral-50 text-neutral-400 text-sm">No image</div>
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
+          <div className="absolute left-4 right-4 bottom-4">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0">
+                <h3 className="line-clamp-2 text-white drop-shadow-md text-lg font-semibold">{it.title}</h3>
+                <div className="mt-1 flex items-center gap-2 text-sm text-white/90">
+                  <span className="rounded-full bg-white/20 px-2 py-0.5 backdrop-blur">{category}</span>
+                  <span>•</span>
+                  <span className="truncate">{location}</span>
+                </div>
+              </div>
+              <div className="rounded-lg bg-white/90 px-3 py-1.5 text-base font-bold text-gray-900 shadow backdrop-blur">
+                ${price}
+              </div>
+            </div>
+            <div className="mt-3 flex items-center justify-between">
+              {slug ? (
+                <Link to={`/s/${slug}`} className="flex items-center gap-2 text-white/95">
+                  <Avatar src={avatar} alt={name} />
+                  <span className="text-sm">{name}</span>
+                </Link>
+              ) : (
+                <div className="flex items-center gap-2 text-white/95">
+                  <Avatar src={avatar} alt={name} />
+                  <span className="text-sm">{name}</span>
+                </div>
+              )}
+              <FavButton itemId={it.id} isFav={isFav} light />
+            </div>
+          </div>
+        </div>
+      </Link>
+    </div>
+  );
+}
+
+/* ------------------------------ Variant 4: Media Left (horizontal on sm+) ------------------------------ */
+function CardMediaLeft({ it, isFav }) {
+  const { thumb, name, avatar, slug, price, category, location } = useItemBasics(it);
+  return (
+    <div className="group grid grid-cols-1 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm transition hover:shadow-md sm:grid-cols-5">
+      <Link to={`/marketplace/${it.id}`} className="sm:col-span-2">
+        <div className="relative h-48 w-full overflow-hidden bg-neutral-50 sm:h-full">
+          {thumb ? (
+            <img src={thumb} alt={it.title} className="h-full w-full object-cover transition-all duration-300 group-hover:scale-[1.03]" loading="lazy" />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-neutral-400 text-sm">No image</div>
+          )}
+          <div className="absolute left-3 top-3 rounded-md bg-white/90 px-2.5 py-1 text-sm font-semibold text-gray-900 shadow-sm">${price}</div>
+        </div>
+      </Link>
+
+      <div className="flex flex-col gap-3 p-4 sm:col-span-3">
+        <Link to={`/marketplace/${it.id}`}><h3 className="line-clamp-2 text-base font-semibold text-gray-900 hover:underline">{it.title}</h3></Link>
+        <p className="text-sm text-neutral-600">{location}</p>
+        <div className="mt-auto flex items-center justify-between">
+          {slug ? (
+            <Link to={`/s/${slug}`} className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} />
+              <div>
+                <div className="text-sm font-medium text-neutral-800">{name}</div>
+                <div className="text-xs text-neutral-500">{category}</div>
+              </div>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} />
+              <div>
+                <div className="text-sm font-medium text-neutral-800">{name}</div>
+                <div className="text-xs text-neutral-500">{category}</div>
+              </div>
+            </div>
+          )}
+          <FavButton itemId={it.id} isFav={isFav} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ Variant 5: Compact (tight, list-friendly) ------------------------------ */
+function CardCompact({ it, isFav }) {
+  const { thumb, name, avatar, slug, price, category, location } = useItemBasics(it);
+  return (
+    <div className="group flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white transition hover:shadow">
+      <Link to={`/marketplace/${it.id}`}>
+        <div className="relative aspect-[3/2] w-full bg-neutral-50">
+          {thumb ? (
+            <img src={thumb} alt={it.title} className="h-full w-full object-cover" loading="lazy" />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-neutral-400 text-sm">No image</div>
+          )}
+        </div>
+      </Link>
+      <div className="flex flex-col gap-2 p-3">
+        <div className="flex items-start justify-between gap-2">
+          <Link to={`/marketplace/${it.id}`} className="min-w-0">
+            <h3 className="line-clamp-1 text-sm font-semibold text-gray-900">{it.title}</h3>
+          </Link>
+          <span className="shrink-0 rounded-full border border-gray-200 px-2 py-0.5 text-xs font-semibold text-gray-900 bg-white">${price}</span>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-neutral-600">
+          <span className="rounded-full bg-gray-100 px-2 py-0.5">{category}</span>
+          <span className="text-neutral-400">•</span>
+          <span className="truncate">{location}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          {slug ? (
+            <Link to={`/s/${slug}`} className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} size="6" />
+              <span className="text-xs text-neutral-700">{name}</span>
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Avatar src={avatar} alt={name} size="6" />
+              <span className="text-xs text-neutral-700">{name}</span>
+            </div>
+          )}
+          <FavButton itemId={it.id} isFav={isFav} small />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ Shared UI bits ------------------------------ */
+function Avatar({ src, alt, size = "8" }) {
+  const sz = { "6": "h-6 w-6", "7": "h-7 w-7", "8": "h-8 w-8" }[size] || "h-8 w-8";
+  return (
+    <div className={`${sz} overflow-hidden rounded-full border bg-neutral-100`}>
+      {src ? (
+        <img src={src} alt={alt} className="h-full w-full object-cover" loading="lazy" />
+      ) : (
+        <div className="grid h-full w-full place-items-center text-[10px] text-neutral-400">?</div>
+      )}
+    </div>
+  );
+}
+
+function FavButton({ itemId, isFav, small = false, light = false }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState(false);
+
   const toggle = async () => {
     setBusy(true);
     try {
@@ -476,11 +711,36 @@ function FavButton({ itemId, isFav }) {
         const { serverTimestamp } = await import("firebase/firestore");
         await (await import("firebase/firestore")).setDoc(favRef, { createdAt: serverTimestamp() });
       }
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const base = [
+    "inline-flex items-center rounded-full border font-medium transition",
+    busy ? "opacity-60" : "",
+  ].join(" ");
+
+  const sizing = small ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm";
+
+  const theme = light
+    ? (isFav
+        ? "border-yellow-200 bg-white/90 text-yellow-700 hover:bg-white"
+        : "border-white/70 bg-white/80 text-gray-800 hover:bg-white")
+    : (isFav
+        ? "border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-yellow-100"
+        : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50");
+
   return (
-    <Button variant={isFav ? "secondary" : "outline"} size="sm" onClick={toggle} loading={busy}>
-      {isFav ? "★ Favorited" : "☆ Favorite"}
-    </Button>
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={busy}
+      aria-label={isFav ? "Remove from favorites" : "Add to favorites"}
+      className={`${base} ${sizing} ${theme}`}
+    >
+      <span className="mr-1">{isFav ? "★" : "☆"}</span>
+      {isFav ? "Favorited" : "Favorite"}
+    </button>
   );
 }
