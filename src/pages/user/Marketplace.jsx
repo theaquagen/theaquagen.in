@@ -397,7 +397,7 @@ function ItemCard({ it, isFav }) {
   const gradientClass = it.gradientClass || defaultGradientClass;
 
   return (
-    <div className="overflow-hidden rounded-3xl shadow-xl ring-1 ring-black/5 bg-white">
+    <div className="overflow-hidden rounded-xl shadow-xl ring-1 ring-black/5 bg-white">
       {/* Top image only */}
       <Link to={`/marketplace/${it.id}`} className="block">
         {thumb ? (
