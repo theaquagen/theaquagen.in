@@ -23,9 +23,10 @@ import {
 import { ChevronDownIcon, FunnelIcon } from '@heroicons/react/20/solid';
 
 import PageHeading from "../../components/ui/PageHeading";
+import { clsx } from "clsx";
 
 const PAGE_SIZE = 12;
-const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"]; // omit "All" because this UI is multi-select
+const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"];
 
 const SORT_OPTIONS = [
   { name: 'Newest', value: 'newest' },
@@ -33,11 +34,8 @@ const SORT_OPTIONS = [
   { name: 'Price: High to Low', value: 'priceDesc' },
 ];
 
-function classNames(...classes) {
-  return classes.filter(Boolean).join(' ')
-}
+function classNames(...classes) { return classes.filter(Boolean).join(' ') }
 
-// ---- Filter UI data (matches your snippet style) ----
 const PRICE_BUCKETS = [
   { value: '0', label: '$0 - $25' },
   { value: '25', label: '$25 - $50' },
@@ -51,17 +49,12 @@ const buildCategoryOptions = () =>
 export default function Marketplace() {
   const { user } = useAuth();
 
-  // Filters state (multi-select like your UI)
-  const [selectedPrices, setSelectedPrices] = useState(new Set()); // '0' | '25' | '50' | '75'
-  const [selectedCategories, setSelectedCategories] = useState(new Set()); // values from CATEGORIES
-  // (Optional placeholders for future: color/size UI kept but not wired to query)
+  const [selectedPrices, setSelectedPrices] = useState(new Set());
+  const [selectedCategories, setSelectedCategories] = useState(new Set());
   const [selectedColors, setSelectedColors] = useState(new Set());
   const [selectedSizes, setSelectedSizes] = useState(new Set());
-
-  // Sort
   const [sort, setSort] = useState("newest");
 
-  // Data state
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -69,14 +62,10 @@ export default function Marketplace() {
   const lastDocRef = useRef(null);
   const [favIds, setFavIds] = useState(new Set());
 
-  // Load user's profile (kept for favorites path only)
   useEffect(() => {
-    (async () => {
-      try { await getDoc(doc(db, "users", user.uid)); } catch {}
-    })();
+    (async () => { try { await getDoc(doc(db, "users", user.uid)); } catch {} })();
   }, [user.uid]);
 
-  // Live favorites
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "users", user.uid, "favorites"), (qs) => {
       const s = new Set(); qs.forEach((d) => s.add(d.id)); setFavIds(s);
@@ -84,7 +73,6 @@ export default function Marketplace() {
     return () => unsub();
   }, [user.uid]);
 
-  // ----- Query builder (server-side filters: categories + sort, pagination) -----
   const buildQuery = (cursor) => {
     const constraints = [];
     const catArr = Array.from(selectedCategories);
@@ -94,13 +82,11 @@ export default function Marketplace() {
     if (sort === "priceAsc") constraints.push(orderBy("price", "asc"));
     else if (sort === "priceDesc") constraints.push(orderBy("price", "desc"));
     else constraints.push(orderBy("createdAt", "desc"));
-
     constraints.push(limit(PAGE_SIZE));
     if (cursor) constraints.push(startAfter(cursor));
     return query(collection(db, "items"), ...constraints);
   };
 
-  // ----- Fetch on filter/sort change -----
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -119,7 +105,6 @@ export default function Marketplace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sort, selectedCategories]);
 
-  // Pagination
   const loadMore = async () => {
     if (endReached || loadingMore) return;
     setLoadingMore(true);
@@ -133,7 +118,6 @@ export default function Marketplace() {
     finally { setLoadingMore(false); }
   };
 
-  // ----- Client-side filters -----
   const priceInBuckets = (price, bucketsSet) => {
     if (!bucketsSet || bucketsSet.size === 0) return true;
     const p = Number(price) || 0;
@@ -154,7 +138,6 @@ export default function Marketplace() {
     });
   }, [items, selectedPrices, selectedColors, selectedSizes]);
 
-  // ----- UI handlers -----
   const toggleInSet = (set, value) => {
     const next = new Set(set);
     if (next.has(value)) next.delete(value);
@@ -176,14 +159,13 @@ export default function Marketplace() {
     (selectedColors.size ? 1 : 0) +
     (selectedSizes.size ? 1 : 0);
 
-  // ---- Render ----
   return (
     <Container className="my-16">
       <div className="space-y-8">
         <PageHeading
-            title="Marketplace"
-            description="Browse items from your community. Use filters or sort to find your next great deal."
-          />
+          title="Marketplace"
+          description="Browse items from your community. Use filters or sort to find your next great deal."
+        />
 
         {/* Filters */}
         <Disclosure
@@ -191,11 +173,8 @@ export default function Marketplace() {
           aria-labelledby="filter-heading"
           className="grid items-center border-t border-b border-gray-200"
         >
-          <h2 id="filter-heading" className="sr-only">
-            Filters
-          </h2>
+          <h2 id="filter-heading" className="sr-only">Filters</h2>
 
-          {/* Left: filter toggle + count, Clear all */}
           <div className="relative col-start-1 row-start-1 py-4">
             <div className="mx-auto flex max-w-7xl divide-x divide-gray-200 px-4 text-sm sm:px-6 lg:px-8">
               <div className="pr-6">
@@ -212,12 +191,9 @@ export default function Marketplace() {
             </div>
           </div>
 
-          {/* Filter content */}
           <DisclosurePanel className="border-t border-gray-200 py-10">
             <div className="mx-auto grid max-w-7xl grid-cols-2 gap-x-4 px-4 text-sm sm:px-6 md:gap-x-6 lg:px-8">
-              {/* Left column */}
               <div className="grid auto-rows-min grid-cols-1 gap-y-10 md:grid-cols-2 md:gap-x-6">
-                {/* Price */}
                 <fieldset>
                   <legend className="block font-medium">Price</legend>
                   <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
@@ -239,7 +215,6 @@ export default function Marketplace() {
                   </div>
                 </fieldset>
 
-                {/* (Optional) Color – UI only for now */}
                 <fieldset>
                   <legend className="block font-medium">Color</legend>
                   <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
@@ -262,9 +237,7 @@ export default function Marketplace() {
                 </fieldset>
               </div>
 
-              {/* Right column */}
               <div className="grid auto-rows-min grid-cols-1 gap-y-10 md:grid-cols-2 md:gap-x-6">
-                {/* (Optional) Size – UI only for now */}
                 <fieldset>
                   <legend className="block font-medium">Size</legend>
                   <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
@@ -286,7 +259,6 @@ export default function Marketplace() {
                   </div>
                 </fieldset>
 
-                {/* Category (wired to Firestore via "in") */}
                 <fieldset>
                   <legend className="block font-medium">Category</legend>
                   <div className="space-y-6 pt-6 sm:space-y-4 sm:pt-4">
@@ -311,7 +283,6 @@ export default function Marketplace() {
             </div>
           </DisclosurePanel>
 
-          {/* Right: Sort menu */}
           <div className="col-start-1 row-start-1 py-4">
             <div className="mx-auto flex max-w-7xl justify-end px-4 sm:px-6 lg:px-8">
               <Menu as="div" className="relative inline-block">
@@ -385,7 +356,6 @@ export default function Marketplace() {
               </>
             )}
 
-            {/* Pagination */}
             <div className="flex justify-center pt-8">
               {!endReached && items.length > 0 && (
                 <Button onClick={loadMore} loading={loadingMore} loadingText="Loading…">
@@ -404,72 +374,74 @@ export default function Marketplace() {
 }
 
 /**
- * New chalet-style glass card
+ * Card: Image on top (aspect 3/2). The section BELOW the image uses your gradient
+ * and LIGHTENS as it goes down (ends in white). No page background gradients.
+ *
+ * You can override per item with:
+ *  - it.gradientClass  (Tailwind class string)
+ *  - it.themeColor     (hex/rgb; used only if gradientClass is absent)
  */
 function ItemCard({ it, isFav }) {
   const thumb = it.images?.[0]?.optimizedURL || it.images?.[0]?.originalURL;
   const title = it.title || "Untitled";
-  const desc =
-    it.description ||
-    "Cozy find with great value and quick pickup available.";
+  const desc = it.description || "Cozy find with great value and quick pickup.";
   const price = Number(it.price || 0).toFixed(2);
   const category = it.category || "Other";
 
-  return (
-    <div className="relative">
-      {/* Favorite overlay (keeps your existing FavButton behavior) */}
-      <div className="absolute right-3 top-3 z-20">
-        <FavButton itemId={it.id} isFav={isFav} />
-      </div>
+  // Option 1: Use your exact gradient classes (recommended). This version lightens to white.
+  const defaultGradientClass =
+    // starts with your palette and ends in white to lighten downward
+    "bg-linear-115 from-[#fff1be] from-25% via-[#ee87cb] via-65% to-white sm:bg-linear-145";
 
-      <Link
-        to={`/marketplace/${it.id}`}
-        className="group block overflow-hidden rounded-3xl shadow-xl ring-1 ring-black/5"
-      >
-        <div className="relative h-72 w-full">
-          {/* Background image */}
-          {thumb ? (
+  // Allow per-item override. If you pass a class, we use it; otherwise we use defaultGradientClass.
+  const gradientClass = it.gradientClass || defaultGradientClass;
+
+  return (
+    <div className="overflow-hidden rounded-3xl shadow-xl ring-1 ring-black/5 bg-white">
+      {/* Top image only */}
+      <Link to={`/marketplace/${it.id}`} className="block">
+        {thumb ? (
+          <div className="relative w-full aspect-[3/2]">
             <img
               src={thumb}
               alt={title}
-              className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+              className="absolute inset-0 h-full w-full object-cover"
             />
-          ) : (
-            <div className="absolute inset-0 grid h-full w-full place-items-center bg-neutral-200 text-neutral-500">
-              No image
-            </div>
-          )}
+          </div>
+        ) : (
+          <div className="grid aspect-[3/2] w-full place-items-center bg-neutral-100 text-neutral-500">
+            No image
+          </div>
+        )}
+      </Link>
 
-          {/* Gradient glass fade */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/0 via-black/20 to-black/70" />
+      {/* Bottom: your gradient (lightening downward) ONLY within the card */}
+      <div className={clsx("relative p-6 sm:p-7 text-neutral-900", gradientClass)}>
+        {/* Optional top softness so the seam under the image is pleasant */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-4 bg-gradient-to-b from-black/0 to-black/0" />
+        <div className="relative">
+          <h3 className="text-xl font-semibold">{title}</h3>
+          <p className="mt-2 text-sm/6 text-neutral-800/90 line-clamp-2">{desc}</p>
 
-          {/* Content (bottom) */}
-          <div className="absolute inset-x-0 bottom-0 p-6 sm:p-7">
-            <h3 className="text-white text-xl font-semibold drop-shadow-sm">
-              {title}
-            </h3>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs ring-1 ring-black/5">
+              {category}
+            </span>
+            <span className="inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs ring-1 ring-black/5">
+              ${price}
+            </span>
+          </div>
 
-            <p className="mt-2 text-white/80 text-sm leading-relaxed line-clamp-2">
-              {desc}
-            </p>
-
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white backdrop-blur-md ring-1 ring-white/20">
-                {category}
-              </span>
-              <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white backdrop-blur-md ring-1 ring-white/20">
-                ${price}
-              </span>
-            </div>
-
-            <div className="mt-5">
-              <div className="inline-flex w-full items-center justify-center rounded-full bg-white px-5 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-white/90">
+          <div className="mt-5 flex items-center gap-3">
+            <FavButton itemId={it.id} isFav={isFav} />
+            <Link to={`/marketplace/${it.id}`} className="flex-1">
+              <div className="inline-flex w-full items-center justify-center rounded-full bg-neutral-900 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800">
                 Reserve now
               </div>
-            </div>
+            </Link>
           </div>
         </div>
-      </Link>
+      </div>
     </div>
   );
 }
@@ -496,7 +468,11 @@ function FavButton({ itemId, isFav }) {
       size="sm"
       onClick={toggle}
       loading={busy}
-      className="backdrop-blur-md !rounded-full !bg-white/80 !text-neutral-900 hover:!bg-white"
+      className={clsx(
+        "!rounded-full",
+        isFav ? "!bg-neutral-900 !text-white hover:!bg-neutral-800" : "!bg-white !text-neutral-900 hover:!bg-white/90",
+        "backdrop-blur-sm ring-1 ring-black/5"
+      )}
     >
       {isFav ? "★ Favorited" : "☆ Favorite"}
     </Button>

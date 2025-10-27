@@ -711,6 +711,7 @@ export default function Profile() {
       <Container className="my-16">
         <div className="space-y-8">
           {/* Header */}
+          
           <PageHeading
             title="Profile"
             description="Manage your personal info, avatar, and public username. You can change your name up to 3 times."
