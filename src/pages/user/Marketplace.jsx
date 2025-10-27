@@ -391,7 +391,7 @@ function ItemCard({ it, isFav }) {
   // Option 1: Use your exact gradient classes (recommended). This version lightens to white.
   const defaultGradientClass =
     // starts with your palette and ends in white to lighten downward
-    "bg-linear-115 from-[#fff1be] from-25% via-[#ee87cb] via-65% to-white sm:bg-linear-145";
+    "bg-linear-115 from-[#fff1be]/90 from-25% via-[#ee87cb]/30 via-65% to-white sm:bg-linear-145";
 
   // Allow per-item override. If you pass a class, we use it; otherwise we use defaultGradientClass.
   const gradientClass = it.gradientClass || defaultGradientClass;
