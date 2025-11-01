@@ -20,10 +20,17 @@ import {
   MenuItem,
   MenuItems
 } from '@headlessui/react';
-import { ChevronDownIcon, FunnelIcon } from '@heroicons/react/20/solid';
+
+import {
+  ChevronDownIcon,
+  FunnelIcon,
+  MapPinIcon,
+  CalendarDaysIcon,
+  TagIcon,
+  EyeIcon
+} from '@heroicons/react/20/solid';
 
 import PageHeading from "../../components/ui/PageHeading";
-import { clsx } from "clsx";
 
 const PAGE_SIZE = 12;
 const CATEGORIES = ["Electronics","Fashion","Home","Vehicles","Sports","Books","Toys","Other"];
@@ -45,6 +52,20 @@ const PRICE_BUCKETS = [
 
 const buildCategoryOptions = () =>
   CATEGORIES.map((c) => ({ value: c, label: c }));
+
+const formatPrice = (value) =>
+  new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(value || 0));
+
+const relativeTime = (date) => {
+  if (!date) return null;
+  const diff = Date.now() - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+};
 
 export default function Marketplace() {
   const { user } = useAuth();
@@ -168,11 +189,7 @@ export default function Marketplace() {
         />
 
         {/* Filters */}
-        <Disclosure
-          as="section"
-          aria-labelledby="filter-heading"
-          className="grid items-center border-t border-b border-gray-200"
-        >
+        <Disclosure as="section" aria-labelledby="filter-heading" className="grid items-center border-t border-b border-gray-200">
           <h2 id="filter-heading" className="sr-only">Filters</h2>
 
           <div className="relative col-start-1 row-start-1 py-4">
@@ -309,6 +326,7 @@ export default function Marketplace() {
                             sort === o.value ? 'font-medium text-gray-900' : 'text-gray-500',
                             'block w-full text-left px-4 py-2 text-sm data-focus:bg-gray-100 data-focus:outline-hidden'
                           )}
+                          aria-pressed={sort === o.value}
                         >
                           {o.name}
                         </button>
@@ -374,107 +392,155 @@ export default function Marketplace() {
 }
 
 /**
- * Card: Image on top (aspect 3/2). The section BELOW the image uses your gradient
- * and LIGHTENS as it goes down (ends in white). No page background gradients.
- *
- * You can override per item with:
- *  - it.gradientClass  (Tailwind class string)
- *  - it.themeColor     (hex/rgb; used only if gradientClass is absent)
+ * Minimal card details styling:
+ *  - Subtle border, soft hover lift, tighter vertical rhythm
+ *  - Neutral typography hierarchy; fewer rings/shadows
+ *  - Price as simple subdued text, not a pill
+ *  - Low-ink meta row; description slightly lighter
+ *  - Floating heart unchanged functionally (♥/♡), no bg
  */
 function ItemCard({ it, isFav }) {
   const thumb = it.images?.[0]?.optimizedURL || it.images?.[0]?.originalURL;
   const title = it.title || "Untitled";
   const desc = it.description || "Cozy find with great value and quick pickup.";
-  const price = Number(it.price || 0).toFixed(2);
+  const price = Number(it.price || 0);
   const category = it.category || "Other";
+  const city = it.city || it.location?.city || "";
+  const distanceKm = typeof it.distanceKm === "number" ? it.distanceKm : null;
+  const views = typeof it.views === "number" ? it.views : null;
 
-  // Option 1: Use your exact gradient classes (recommended). This version lightens to white.
-  const defaultGradientClass =
-    // starts with your palette and ends in white to lighten downward
-    "bg-linear-115 from-[#fff1be]/90 from-25% via-[#ee87cb]/30 via-65% to-white sm:bg-linear-145";
-
-  // Allow per-item override. If you pass a class, we use it; otherwise we use defaultGradientClass.
-  const gradientClass = it.gradientClass || defaultGradientClass;
+  const createdAt = (() => {
+    try { return it.createdAt?.toDate ? it.createdAt.toDate() : (it.createdAt instanceof Date ? it.createdAt : null); }
+    catch { return null; }
+  })();
 
   return (
-    <div className="overflow-hidden rounded-xl shadow-xl ring-1 ring-black/5 bg-white">
-      {/* Top image only */}
-      <Link to={`/marketplace/${it.id}`} className="block">
-        {thumb ? (
-          <div className="relative w-full aspect-[3/2]">
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white transition-shadow hover:shadow-sm">
+      {/* Media */}
+      <Link to={`/marketplace/${it.id}`} className="block" aria-label={`View details for ${title}`}>
+        <div className="relative w-full aspect-[3/2]">
+          {thumb ? (
             <img
               src={thumb}
               alt={title}
               className="absolute inset-0 h-full w-full object-cover"
+              loading="lazy"
             />
-          </div>
-        ) : (
-          <div className="grid aspect-[3/2] w-full place-items-center bg-neutral-100 text-neutral-500">
-            No image
-          </div>
-        )}
+          ) : (
+            <div className="absolute inset-0 grid place-items-center bg-neutral-100 text-neutral-500">
+              No image
+            </div>
+          )}
+
+          {/* Floating heart */}
+          <HeartButton
+            itemId={it.id}
+            isFav={isFav}
+            className="absolute top-2 right-2 z-10"
+            stopLinkNavigation
+          />
+        </div>
       </Link>
 
-      {/* Bottom: your gradient (lightening downward) ONLY within the card */}
-      <div className={clsx("relative p-6 sm:p-7 text-neutral-900", gradientClass)}>
-        {/* Optional top softness so the seam under the image is pleasant */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-4 bg-gradient-to-b from-black/0 to-black/0" />
-        <div className="relative">
-          <h3 className="text-xl font-semibold">{title}</h3>
-          <p className="mt-2 text-sm/6 text-neutral-800/90 line-clamp-2">{desc}</p>
+      {/* Details */}
+      <div className="p-4 sm:p-5">
+        {/* Title */}
+        <h3 className="text-[15px] sm:text-base font-medium text-neutral-900 tracking-tight line-clamp-2" title={title}>
+          {title}
+        </h3>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs ring-1 ring-black/5">
+        {/* Price (minimal) */}
+        <div className="mt-1.5 text-sm font-medium text-neutral-900">
+          {formatPrice(price)}
+        </div>
+
+        {/* Meta row */}
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-neutral-600">
+          {category && (
+            <span className="inline-flex items-center gap-1">
+              <TagIcon className="size-3.5 opacity-70" aria-hidden="true" />
               {category}
             </span>
-            <span className="inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs ring-1 ring-black/5">
-              ${price}
+          )}
+          {(city || distanceKm !== null) && (
+            <span className="inline-flex items-center gap-1">
+              <MapPinIcon className="size-3.5 opacity-70" aria-hidden="true" />
+              {city}{city && distanceKm !== null ? " • " : ""}{distanceKm !== null ? `${distanceKm.toFixed(0)} km` : ""}
             </span>
-          </div>
-
-          <div className="mt-5 flex items-center gap-3">
-            <FavButton itemId={it.id} isFav={isFav} />
-            <Link to={`/marketplace/${it.id}`} className="flex-1">
-              <div className="inline-flex w-full items-center justify-center rounded-full bg-neutral-900 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-800">
-                Reserve now
-              </div>
-            </Link>
-          </div>
+          )}
+          {createdAt && (
+            <span className="inline-flex items-center gap-1">
+              <CalendarDaysIcon className="size-3.5 opacity-70" aria-hidden="true" />
+              <time dateTime={createdAt.toISOString()}>
+                {relativeTime(createdAt)}
+              </time>
+            </span>
+          )}
+          {views !== null && (
+            <span className="inline-flex items-center gap-1">
+              <EyeIcon className="size-3.5 opacity-70" aria-hidden="true" />
+              {Intl.NumberFormat().format(views)}
+            </span>
+          )}
         </div>
+
+        {/* Description */}
+        <p className="mt-2.5 text-[13px]/6 text-neutral-700 line-clamp-2" title={desc}>
+          {desc}
+        </p>
       </div>
     </div>
   );
 }
 
-function FavButton({ itemId, isFav }) {
+/** Heart favorite toggle (♥ / ♡) — minimal style */
+function HeartButton({ itemId, isFav, className, stopLinkNavigation = false }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState(false);
-  const toggle = async () => {
+  const [localFav, setLocalFav] = useState(isFav);
+
+  useEffect(() => { setLocalFav(isFav); }, [isFav]);
+
+  const toggle = async (e) => {
+    if (stopLinkNavigation && e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!user?.uid || busy) return;
+
     setBusy(true);
     try {
       const favRef = doc(db, "users", user.uid, "favorites", itemId);
       const exists = (await getDoc(favRef)).exists();
       if (exists) {
         await (await import("firebase/firestore")).deleteDoc(favRef);
+        setLocalFav(false);
       } else {
         const { serverTimestamp } = await import("firebase/firestore");
         await (await import("firebase/firestore")).setDoc(favRef, { createdAt: serverTimestamp() });
+        setLocalFav(true);
       }
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
+
   return (
-    <Button
-      variant={isFav ? "secondary" : "outline"}
-      size="sm"
+    <button
+      type="button"
       onClick={toggle}
-      loading={busy}
-      className={clsx(
-        "!rounded-full",
-        isFav ? "!bg-neutral-900 !text-white hover:!bg-neutral-800" : "!bg-white !text-neutral-900 hover:!bg-white/90",
-        "backdrop-blur-sm ring-1 ring-black/5"
-      )}
+      disabled={busy}
+      aria-pressed={localFav}
+      aria-label={localFav ? "Remove from favorites" : "Add to favorites"}
+      className={[
+        "inline-flex items-center justify-center transition text-lg select-none",
+        localFav ? "text-red-600" : "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] hover:text-red-500",
+        busy ? "opacity-60 cursor-not-allowed" : "",
+        className || ""
+      ].join(" ")}
+      title={localFav ? "Favorited" : "Add to favorites"}
     >
-      {isFav ? "★ Favorited" : "☆ Favorite"}
-    </Button>
+      <span aria-hidden="true">{localFav ? "♥" : "♡"}</span>
+    </button>
   );
 }
