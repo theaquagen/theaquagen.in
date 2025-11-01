@@ -392,12 +392,11 @@ export default function Marketplace() {
 }
 
 /**
- * Minimal card details styling:
- *  - Subtle border, soft hover lift, tighter vertical rhythm
- *  - Neutral typography hierarchy; fewer rings/shadows
- *  - Price as simple subdued text, not a pill
- *  - Low-ink meta row; description slightly lighter
- *  - Floating heart unchanged functionally (♥/♡), no bg
+ * Minimal, typography-first card:
+ *  - Bigger heart (no bg) at bottom-right of the image.
+ *  - Price is first in the content area, large & bold.
+ *  - Then title, tiny meta row, and short description.
+ *  - Subtle border + hover; no extra elements added.
  */
 function ItemCard({ it, isFav }) {
   const thumb = it.images?.[0]?.optimizedURL || it.images?.[0]?.originalURL;
@@ -432,11 +431,11 @@ function ItemCard({ it, isFav }) {
             </div>
           )}
 
-          {/* Floating heart */}
+          {/* Bigger heart, bottom-right */}
           <HeartButton
             itemId={it.id}
             isFav={isFav}
-            className="absolute top-2 right-2 z-10"
+            className="absolute bottom-2 right-2 z-10"
             stopLinkNavigation
           />
         </div>
@@ -444,18 +443,18 @@ function ItemCard({ it, isFav }) {
 
       {/* Details */}
       <div className="p-4 sm:p-5">
-        {/* Title */}
-        <h3 className="text-[15px] sm:text-base font-medium text-neutral-900 tracking-tight line-clamp-2" title={title}>
-          {title}
-        </h3>
-
-        {/* Price (minimal) */}
-        <div className="mt-1.5 text-sm font-medium text-neutral-900">
+        {/* Price first (prominent) */}
+        <div className="text-lg sm:text-xl font-bold text-neutral-900">
           {formatPrice(price)}
         </div>
 
-        {/* Meta row */}
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-neutral-600">
+        {/* Title */}
+        <h3 className="mt-1 text-[15px] sm:text-base font-medium text-neutral-900 tracking-tight line-clamp-2" title={title}>
+          {title}
+        </h3>
+
+        {/* Meta row (quiet) */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-neutral-600">
           {category && (
             <span className="inline-flex items-center gap-1">
               <TagIcon className="size-3.5 opacity-70" aria-hidden="true" />
@@ -485,7 +484,7 @@ function ItemCard({ it, isFav }) {
         </div>
 
         {/* Description */}
-        <p className="mt-2.5 text-[13px]/6 text-neutral-700 line-clamp-2" title={desc}>
+        <p className="mt-2 text-[13px]/6 text-neutral-700 line-clamp-2" title={desc}>
           {desc}
         </p>
       </div>
@@ -493,7 +492,7 @@ function ItemCard({ it, isFav }) {
   );
 }
 
-/** Heart favorite toggle (♥ / ♡) — minimal style */
+/** Heart favorite toggle (♥ / ♡) — bigger size, no background */
 function HeartButton({ itemId, isFav, className, stopLinkNavigation = false }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -533,7 +532,8 @@ function HeartButton({ itemId, isFav, className, stopLinkNavigation = false }) {
       aria-pressed={localFav}
       aria-label={localFav ? "Remove from favorites" : "Add to favorites"}
       className={[
-        "inline-flex items-center justify-center transition text-lg select-none",
+        "inline-flex items-center justify-center transition select-none",
+        "text-2xl sm:text-3xl leading-none", // bigger heart
         localFav ? "text-red-600" : "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)] hover:text-red-500",
         busy ? "opacity-60 cursor-not-allowed" : "",
         className || ""
